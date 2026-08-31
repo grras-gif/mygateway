@@ -6,6 +6,9 @@
 
 ## 未发布：仓库整理与接续开发基线
 
+- Gateway JSON 请求体默认上限由 2 MiB 提高到 16 MiB；System 页新增网关运行参数，可调整至
+  最高 64 MiB，适配内嵌 Base64 图片请求。设置保存到 D1，数据面使用 60 秒 isolate 缓存，
+  413 响应会明确返回当前上限；单元、Admin API 和 UI 测试覆盖边界、持久化与页面交互。
 - 收敛 Deploy to Cloudflare 首次配置：Worker 名统一为 `mygateway`，资源名称提供默认值，移除已有
   源码默认值的 Wrangler 变量和未使用的 `env.local` D1。表单只保留初始管理员密码并说明默认值；
   `MASTER_KEY` 由部署脚本内部生成。新增 `test:deploy-config` 防止多余填空回归。

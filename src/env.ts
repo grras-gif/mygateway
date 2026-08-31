@@ -23,7 +23,7 @@ export interface Env {
   /** Timezone for "today" dashboard boundary. Default: Asia/Shanghai */
   DEFAULT_TIMEZONE?: string;
 
-  /** Max request body size in bytes. Default: 2097152 (2 MiB) */
+  /** Deployment fallback for max request body size. Default: 16777216 (16 MiB). */
   MAX_REQUEST_BYTES?: string;
 
   /** Max channel attempts per request. Default: 3 */
@@ -56,7 +56,7 @@ export interface RuntimeConfig {
 const DEFAULTS = {
   appVersion: '0.1.0',
   defaultTimezone: 'Asia/Shanghai',
-  maxRequestBytes: 2_097_152,
+  maxRequestBytes: 16 * 1_048_576,
   maxChannelAttempts: 3,
   upstreamHeaderTimeoutMs: 30_000,
   usageRetentionDays: 30,

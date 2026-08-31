@@ -92,6 +92,11 @@ export async function resetState(api: APIRequestContext): Promise<void> {
   });
   expect(publicUrlResponse.ok()).toBeTruthy();
 
+  const runtimeSettingsResponse = await api.put('/admin/api/system/runtime-settings', {
+    data: { max_request_body_mib: 16 },
+  });
+  expect(runtimeSettingsResponse.ok()).toBeTruthy();
+
   const channels = await api.get('/admin/api/channels').then((r) => r.json());
   for (const ch of channels) {
     await api.delete(`/admin/api/channels/${ch.id}`);

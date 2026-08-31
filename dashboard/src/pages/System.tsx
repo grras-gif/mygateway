@@ -27,6 +27,12 @@ interface AnalyticsSettings {
   requestLogRetentionDays: number;
 }
 
+interface RuntimeSettings {
+  max_request_body_mib: number;
+  default_max_request_body_mib: number;
+  maximum_max_request_body_mib: number;
+}
+
 interface ManagementKeyRow {
   id: string;
   name: string;
@@ -45,6 +51,7 @@ interface RevealedManagementKey {
 }
 
 const MANAGEMENT_KEY_STORAGE = 'mygateway.management-key.reveal.v1';
+const REQUEST_BODY_SIZE_OPTIONS = [16, 32, 48, 64];
 
 function readRevealedManagementKey(): RevealedManagementKey | null {
   try {
@@ -95,6 +102,15 @@ export default function System() {
   const [publicUrlBusy, setPublicUrlBusy] = createSignal(false);
   const [publicUrlError, setPublicUrlError] = createSignal('');
   const [publicUrlSaved, setPublicUrlSaved] = createSignal(false);
+  const [runtimeSettings, setRuntimeSettings] = createSignal<RuntimeSettings>({
+    max_request_body_mib: 16,
+    default_max_request_body_mib: 16,
+    maximum_max_request_body_mib: 64,
+  });
+  const [runtimeDraftMiB, setRuntimeDraftMiB] = createSignal(16);
+  const [runtimeBusy, setRuntimeBusy] = createSignal(false);
+  const [runtimeError, setRuntimeError] = createSignal('');
+  const [runtimeSaved, setRuntimeSaved] = createSignal(false);
   const [managementKeys, setManagementKeys] = createSignal<ManagementKeyRow[]>([]);
   const [managementName, setManagementName] = createSignal('Agent automation');
   const [managementPermission, setManagementPermission] = createSignal<'read' | 'write'>('write');
@@ -107,6 +123,10 @@ export default function System() {
   const [copied, setCopied] = createSignal(false);
 
   const settingsDirty = () => JSON.stringify(settingsDraft()) !== JSON.stringify(settings());
+  const requestBodySizeOptions = () => Array.from(new Set([
+    ...REQUEST_BODY_SIZE_OPTIONS,
+    runtimeDraftMiB(),
+  ])).sort((left, right) => left - right);
   const patchDraft = (patch: Partial<AnalyticsSettings>) => {
     setSettingsDraft((d) => ({ ...d, ...patch }));
     setSettingsSaved(false);
@@ -122,6 +142,7 @@ export default function System() {
     await fetchSettings();
     await loadManagementKeys();
     await loadPublicUrl();
+    await loadRuntimeSettings();
   });
 
   const revealTimer = window.setInterval(() => {
@@ -237,6 +258,33 @@ export default function System() {
   };
 
   const effectivePublicUrl = () => savedPublicUrl() || location.origin;
+
+  const loadRuntimeSettings = async () => {
+    try {
+      const response = await fetch('/admin/api/system/runtime-settings');
+      if (!response.ok) return;
+      const next = await response.json() as RuntimeSettings;
+      setRuntimeSettings(next);
+      setRuntimeDraftMiB(next.max_request_body_mib);
+    } catch { /* retain the documented default */ }
+  };
+
+  const saveRuntimeSettings = async () => {
+    setRuntimeBusy(true); setRuntimeError(''); setRuntimeSaved(false);
+    try {
+      const response = await fetch('/admin/api/system/runtime-settings', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_request_body_mib: runtimeDraftMiB() }),
+      });
+      const body = await response.json() as RuntimeSettings & { error?: { message?: string } };
+      if (!response.ok) throw new Error(body.error?.message ?? t('system.runtimeSaveFailed'));
+      setRuntimeSettings(body);
+      setRuntimeDraftMiB(body.max_request_body_mib);
+      setRuntimeSaved(true);
+    } catch (cause) {
+      setRuntimeError(cause instanceof Error ? cause.message : t('system.runtimeSaveFailed'));
+    } finally { setRuntimeBusy(false); }
+  };
 
   const agentPrompt = () => {
     const revealed = revealedManagementKey();
@@ -453,6 +501,49 @@ export default function System() {
           )}</For>
         </div>
         <Show when={managementKeys().length > 3}><button class="management-list-toggle" onClick={() => setManagementExpanded(!managementExpanded())}>{managementExpanded() ? t('management.collapse') : t('management.showAll').replace('{count}', String(managementKeys().length))}</button></Show>
+      </section>
+
+      <section class="panel settings-card wide runtime-settings-card">
+        <div class="settings-copy">
+          <span class="eyebrow">{t('system.eyebrowRuntime')}</span>
+          <h2>{t('system.runtimeTitle')}</h2>
+          <p>{t('system.runtimeBody')}</p>
+        </div>
+        <div class="runtime-setting-row">
+          <div class="runtime-setting-copy">
+            <strong>{t('system.requestBodyLimit')}</strong>
+            <small>{t('system.requestBodyLimitHint')}</small>
+          </div>
+          <label class="runtime-setting-field">
+            <span>{t('system.requestBodyLimit')}</span>
+            <select
+              value={runtimeDraftMiB()}
+              onChange={(event) => {
+                setRuntimeDraftMiB(Number(event.currentTarget.value));
+                setRuntimeSaved(false);
+                setRuntimeError('');
+              }}
+            >
+              <For each={requestBodySizeOptions()}>{(size) => (
+                <option value={size}>{size} MiB</option>
+              )}</For>
+            </select>
+          </label>
+        </div>
+        <div class="runtime-settings-footer">
+          <small>{t('system.runtimeApplyHint')}</small>
+          <div class="runtime-settings-actions">
+            <Show when={runtimeError()}><span class="form-error" role="alert">{runtimeError()}</span></Show>
+            <Show when={runtimeSaved()}><span class="price-saved" role="status">{t('common.saved')}</span></Show>
+            <button
+              class="primary-button"
+              disabled={runtimeBusy() || runtimeDraftMiB() === runtimeSettings().max_request_body_mib}
+              onClick={saveRuntimeSettings}
+            >
+              {runtimeBusy() ? t('common.saving') : t('common.save')}
+            </button>
+          </div>
+        </div>
       </section>
 
       <section class="panel settings-card wide log-settings-card">

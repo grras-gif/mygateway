@@ -256,6 +256,11 @@ export async function handleAdminApi(
     return handlePublicUrlSetting(request, env, requestId);
   }
 
+  if (path === '/admin/api/system/runtime-settings') {
+    const { handleRuntimeSettings } = await import('./system.ts');
+    return handleRuntimeSettings(request, env, requestId);
+  }
+
   if (path === '/admin/api/system/settings') {
     const { handleSystemSettings } = await import('./system.ts');
     return handleSystemSettings(request, env, requestId);

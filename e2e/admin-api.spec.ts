@@ -42,6 +42,37 @@ test.afterAll(async ({ request }) => {
   await resetState(request);
 });
 
+test('system: validates and persists the request body limit', async ({ request }) => {
+  await loginViaApi(request);
+  const initial = await request.get('/admin/api/system/runtime-settings');
+  expect(initial.status()).toBe(200);
+  expect(await initial.json()).toMatchObject({
+    max_request_body_mib: 16,
+    default_max_request_body_mib: 16,
+    maximum_max_request_body_mib: 64,
+  });
+
+  const tooSmall = await request.put('/admin/api/system/runtime-settings', {
+    data: { max_request_body_mib: 15 },
+  });
+  expect(tooSmall.status()).toBe(400);
+  expect((await tooSmall.json()).error.code).toBe('invalid_request');
+
+  const tooLarge = await request.put('/admin/api/system/runtime-settings', {
+    data: { max_request_body_mib: 65 },
+  });
+  expect(tooLarge.status()).toBe(400);
+
+  const saved = await request.put('/admin/api/system/runtime-settings', {
+    data: { max_request_body_mib: 64 },
+  });
+  expect(saved.status()).toBe(200);
+  expect((await saved.json()).max_request_body_mib).toBe(64);
+  expect((await request.get('/admin/api/system/runtime-settings').then((response) => response.json())).max_request_body_mib).toBe(64);
+
+  await request.put('/admin/api/system/runtime-settings', { data: { max_request_body_mib: 16 } });
+});
+
 test('channels: validates protocols, persists edits, status, and duplicate-key constraints', async ({ request }) => {
   await loginViaApi(request);
   const baseA = `https://provider-a-${run}.example/v1`;

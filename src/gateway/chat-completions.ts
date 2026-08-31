@@ -16,6 +16,7 @@ import { logEvent } from '../shared/log.ts';
 import { checkQuota, checkRpm, configureKeyQuota, keyIsExpired } from './key-quota.ts';
 import { recordRejectedRequest, recordRequestCompletion, type UsageRecordContext } from './usage-recorder.ts';
 import { readLogPolicy, type LogPolicy } from './log-policy.ts';
+import { MEBIBYTE, readMaxRequestBytes } from './runtime-settings.ts';
 import {
   authenticateGatewayKeyHash,
   resolveGatewayAccess,
@@ -90,7 +91,10 @@ async function handleProtocolCompletion(
   const requestStartedAt = performance.now();
   const config = parseConfig(env);
   configureKeyQuota(config.keyQuotaRefreshMs);
-  const logPolicy = await readLogPolicy(env.DB);
+  const [logPolicy, maxRequestBytes] = await Promise.all([
+    readLogPolicy(env.DB),
+    readMaxRequestBytes(env.DB, config.maxRequestBytes),
+  ]);
 
   const invalidKeyResponse = () => gatewayErrorResponse(
     'invalid_api_key',
@@ -101,12 +105,16 @@ async function handleProtocolCompletion(
   // 1. Read and validate body
   let bodyText: string | null;
   try {
-    bodyText = await readLimitedBody(request, config.maxRequestBytes, requestId);
+    bodyText = await readLimitedBody(request, maxRequestBytes, requestId);
   } catch (e) {
     if (e instanceof BodyTooLargeError) {
       const response = !(await authenticateGatewayKeyHash(env.DB, gatewayKeyHash))
         ? invalidKeyResponse()
-        : gatewayErrorResponse('request_too_large', 'Request body exceeds size limit', requestId);
+        : gatewayErrorResponse(
+          'request_too_large',
+          `Request body exceeds ${maxRequestBytes / MEBIBYTE} MiB limit`,
+          requestId,
+        );
       return applyServerTiming(response, { gatewayTtfbMs: elapsedMs(requestStartedAt) });
     }
     throw e;

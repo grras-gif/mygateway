@@ -81,6 +81,7 @@ Bug 修复必须在最低有效层增加回归用例。跨层缺陷可以增加�
 | `deepseek-balance.test.ts` | 官方 host、金额精度、鉴权和错误清理 |
 | `key-quota.test.ts` | 密钥到期、RPM 窗口、日 / 周 / 月 / 年预算边界、台账缓存与成本计算 |
 | `log-policy.test.ts` | 日志总开关、级别策略、合并 batch、TTFT 与上下文写入矩阵 |
+| `runtime-settings.test.ts` | 请求体默认值、16-64 MiB 校验、isolate 缓存及声明/流式大小边界 |
 | `fallback-policy.test.ts` | HTTP / Provider 错误分类 |
 | `model-discovery.test.ts` | OpenAI / Gemini / Anthropic 模型列表、分页和 ID 规范化 |
 | `passive-circuit-breaker.test.ts` | 阈值、冷却、恢复和容量 |
@@ -164,7 +165,8 @@ E2E 会创建、修改和删除渠道、模型与 Gateway Key。不要指向包�
 10. 删除渠道显示关联影响，清理失去最后实例的统一模型，并保留仍有备用渠道的模型；
 11. Analytics Usage 页面展示指标卡、模型表和筛选切换；
 12. Analytics Logs 页面展示日志表、游标分页和详情抽屉；日志策略与清空日志仅在系统设置页；
-13. 退出登录回到登录页。
+13. System 运行参数展示 16 MiB 默认值，可保存至最高 64 MiB，并验证参数卡片顺序；
+14. 退出登录回到登录页。
 
 该套件不需要有效 Provider Key，但 Chat 错误透传用例会用 dummy key 请求 DeepSeek 并期待
 401，因此运行环境需要能够访问其 API。
@@ -173,13 +175,14 @@ E2E 会创建、修改和删除渠道、模型与 Gateway Key。不要指向包�
 
 `e2e/admin-api.spec.ts` 不使用真实 Provider Key，按以下领域串行组织：
 
-1. 创建自定义三协议渠道，验证空协议、重复协议、非 HTTPS 地址、重复 Provider Key；保存名称、
+1. 读取和保存 Gateway 请求体上限，拒绝低于 16 MiB 或高于 64 MiB 的值；
+2. 创建自定义三协议渠道，验证空协议、重复协议、非 HTTPS 地址、重复 Provider Key；保存名称、
    协议 Base URL 和启停状态，并验证编辑阶段的重复 Key 冲突；
-2. 手工渠道模型库存的添加、重复添加幂等、列表、删除与非法参数；
-3. 统一模型创建、重复 ID、渠道实例添加、同渠道重复实例、Alias 冲突、实例定价、币种校验、
+3. 手工渠道模型库存的添加、重复添加幂等、列表、删除与非法参数；
+4. 统一模型创建、重复 ID、渠道实例添加、同渠道重复实例、Alias 冲突、实例定价、币种校验、
    负价格、回退顺序、模型编辑、删除后使用相同 ID 重建；
-4. 从库存导入模型、重复导入幂等、库存缺失和超过 100 个模型的批量限制；
-5. Gateway HTTP 验证模型白名单、停用 Key、未知模型、协议不可用及渠道停用后的模型不可用。
+5. 从库存导入模型、重复导入幂等、库存缺失和超过 100 个模型的批量限制；
+6. Gateway HTTP 验证模型白名单、停用 Key、未知模型、协议不可用及渠道停用后的模型不可用。
 
 该套件只使用本地 D1 和不会实际访问的 Provider 地址，适合常规 CI。它不替代下述可控上游与
 真实 Provider 测试。

@@ -293,7 +293,7 @@ Cloudflare 预算与 Free Tier 容量规划见 [DEPLOY](DEPLOY.md)。
 | `APP_VERSION` | `0.1.0` | 应用版本 |
 | `INITIAL_ADMIN_USERNAME` | `admin` | 首次管理员用户名 |
 | `DEFAULT_TIMEZONE` | `Asia/Shanghai` | “今日”统计时区 |
-| `MAX_REQUEST_BYTES` | `2097152` | Gateway JSON 请求体上限 |
+| `MAX_REQUEST_BYTES` | `16777216` | 尚未保存控制台设置时的 Gateway JSON 请求体回退上限 |
 | `MAX_CHANNEL_ATTEMPTS` | `3` | 单请求最多尝试渠道数 |
 | `UPSTREAM_HEADER_TIMEOUT_MS` | `30000` | 每候选等待响应头上限 |
 | `KEY_QUOTA_REFRESH_MS` | `30000` | 有限额 Key 每 isolate 刷新 D1 周期预算快照的间隔 |
@@ -302,7 +302,8 @@ Cloudflare 预算与 Free Tier 容量规划见 [DEPLOY](DEPLOY.md)。
 Secrets：`MASTER_KEY`、`INITIAL_ADMIN_PASSWORD`，以及仅用于旧部署迁移的 `ADMIN_TOKEN`。
 Deploy Button 只展示有默认值且允许用户修改的 `INITIAL_ADMIN_PASSWORD`；部署脚本自动生成内部
 `MASTER_KEY`，它不属于控制台用户需要读取或轮换的日常配置。运行时调优参数使用 `src/env.ts`
-的校验默认值，默认部署不在 `wrangler.jsonc` 暴露变量表单。
+的校验默认值，默认部署不在 `wrangler.jsonc` 暴露变量表单。请求体上限可在 System 页保存到 D1，
+允许 16-64 MiB，并由数据面以 60 秒 isolate TTL 缓存读取；控制台值存在时优先于部署回退值。
 源码本地入口 `scripts/local.mjs` 在缺少依赖时执行锁定安装，安全生成 `.dev.vars`，再复用现有
 Dashboard 构建、D1 migration 和 Wrangler dev 命令；它不实现另一套 Node 数据面。生产绑定与
 初始化见 [DEPLOY](DEPLOY.md)。

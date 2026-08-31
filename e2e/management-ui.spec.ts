@@ -44,10 +44,24 @@ test('system page validates and applies the canonical website URL', async ({ pag
   expect(Math.abs(accountBox!.y - publicUrlBox!.y)).toBeLessThan(2);
 
   const managementBox = await page.locator('.management-card').boundingBox();
+  const runtimeBox = await page.locator('.runtime-settings-card').boundingBox();
   const loggingBox = await page.locator('.log-settings-card').boundingBox();
+  expect(runtimeBox).not.toBeNull();
   expect(managementBox).not.toBeNull();
   expect(loggingBox).not.toBeNull();
-  expect(managementBox!.y).toBeLessThan(loggingBox!.y);
+  expect(managementBox!.y).toBeLessThan(runtimeBox!.y);
+  expect(runtimeBox!.y).toBeLessThan(loggingBox!.y);
+
+  const runtimeCard = page.locator('.runtime-settings-card');
+  await expect(runtimeCard.getByRole('heading', { name: '网关参数' })).toBeVisible();
+  const requestLimit = runtimeCard.getByRole('combobox', { name: '请求体上限' });
+  await expect(requestLimit).toHaveValue('16');
+  await requestLimit.selectOption('64');
+  await runtimeCard.getByRole('button', { name: '保存' }).click();
+  await expect(runtimeCard.getByRole('status')).toContainText('已保存');
+  await expect(requestLimit).toHaveValue('64');
+  const runtimeSetting = await page.request.get('/admin/api/system/runtime-settings').then((response) => response.json());
+  expect(runtimeSetting.max_request_body_mib).toBe(64);
 
   const aboutCard = page.locator('.system-note-card');
   await expect(aboutCard.getByRole('heading', { name: '关于 MyGateway' })).toBeVisible();

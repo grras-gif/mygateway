@@ -2,12 +2,21 @@
  * System settings and provider presets API.
  */
 
-import { Env } from '../env.ts';
+import { Env, parseConfig } from '../env.ts';
 import { PROVIDER_PRESETS } from '../shared/provider-presets.ts';
 import { gatewayErrorResponse } from '../http/errors.ts';
 import { json } from './router.ts';
 import { getSetting, setSetting } from '../db/settings.ts';
 import { invalidateLogPolicyCache } from '../gateway/log-policy.ts';
+import {
+  DEFAULT_MAX_REQUEST_BODY_MIB,
+  invalidateRuntimeSettingsCache,
+  MAX_REQUEST_BODY_MIB,
+  MAX_REQUEST_BODY_SETTING,
+  MEBIBYTE,
+  parseMaxRequestBodyMiB,
+  readMaxRequestBytes,
+} from '../gateway/runtime-settings.ts';
 
 const PUBLIC_URL_SETTING = 'public_url';
 
@@ -97,6 +106,40 @@ export async function handlePublicUrlSetting(
       return gatewayErrorResponse('invalid_request', (error as Error).message, requestId);
     }
   }
+  return gatewayErrorResponse('invalid_request', 'Method not allowed', requestId);
+}
+
+/** GET/PUT /admin/api/system/runtime-settings */
+export async function handleRuntimeSettings(
+  request: Request,
+  env: Env,
+  requestId: string,
+): Promise<Response> {
+  if (request.method === 'GET') {
+    const configuredBytes = await readMaxRequestBytes(env.DB, parseConfig(env).maxRequestBytes);
+    return json({
+      max_request_body_mib: configuredBytes / MEBIBYTE,
+      default_max_request_body_mib: DEFAULT_MAX_REQUEST_BODY_MIB,
+      maximum_max_request_body_mib: MAX_REQUEST_BODY_MIB,
+    });
+  }
+
+  if (request.method === 'PUT') {
+    try {
+      const body = await request.json() as { max_request_body_mib?: unknown };
+      const maxRequestBodyMiB = parseMaxRequestBodyMiB(body.max_request_body_mib);
+      await setSetting(env.DB, MAX_REQUEST_BODY_SETTING, String(maxRequestBodyMiB * MEBIBYTE));
+      invalidateRuntimeSettingsCache();
+      return json({
+        max_request_body_mib: maxRequestBodyMiB,
+        default_max_request_body_mib: DEFAULT_MAX_REQUEST_BODY_MIB,
+        maximum_max_request_body_mib: MAX_REQUEST_BODY_MIB,
+      });
+    } catch (error) {
+      return gatewayErrorResponse('invalid_request', (error as Error).message, requestId);
+    }
+  }
+
   return gatewayErrorResponse('invalid_request', 'Method not allowed', requestId);
 }
 
