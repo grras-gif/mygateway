@@ -3,13 +3,13 @@
 [English](CONTRIBUTING.md) · [简体中文](CONTRIBUTING.zh-CN.md)
 
 Thanks for your interest in MyGateway. The project is small by design: it runs
-on EdgeOne Makers, prefers one KV namespace + isolate memory over shared state, and
+on EdgeOne Makers, prefers one Blob storage binding + isolate memory over shared state, and
 prioritizes "simple to run and understand" over enterprise features.
 
 ## Project principles
 
 - **Free allowance first.** No self-hosted services, no R2/Queues/Durable
-  Objects, and no extra KV namespaces unless the free allowance keeps working.
+  Objects, and no extra storage bindings unless the free allowance keeps working.
 - **Simple and predictable.** Fixed-priority routing, pre-response fallback,
   and no hidden background probing.
 - **Easy to use.** One key, one console; sensible defaults that work out of the
@@ -48,7 +48,7 @@ Before opening a PR make sure:
 1. `npm run test:fast` passes.
 2. Run every affected layer from the testing activity matrix.
 3. Release maintainers run `npm run test:release`; contributors without SIT credentials use `test:release:local`.
-4. KV key shapes are defined in `src/kv/keys.ts`; there is no SQL schema to migrate.
+4. Blob object paths are defined in `src/kv/keys.ts`; there is no SQL schema to migrate.
 5. New user-visible behavior is documented in `docs/PRD.md`; implementation
    details go in the relevant architecture or design document without copying
    the same section into every file.
@@ -60,8 +60,8 @@ Before opening a PR make sure:
 | `functions/` | Edge function entry (catch-all route + static asset fallthrough) |
 | `src/gateway/` | `/v1/*` request path: auth, routing, fallback, quota, caching |
 | `src/admin/` | `/admin/api/*` control plane |
-| `src/db/` | Domain data access over KV |
-| `src/kv/` | Key prefixes and JSON/pagination helpers |
+| `src/db/` | Domain data access over Blob storage |
+| `src/kv/` | Object path prefixes and JSON/pagination helpers |
 | `migrations/` | Historical SQL baseline (read-only reference; not executed) |
 | `dashboard/` | SolidJS admin console (static assets published by EdgeOne Makers) |
 | `test/` | Vitest unit tests |

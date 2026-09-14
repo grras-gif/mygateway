@@ -1,14 +1,14 @@
 /**
- * Analytics data operations (KV-backed) — 5-minute aggregation buckets and
- * cursor-paginated request_logs queries.
+ * Analytics data operations (Blob-backed) — 5-minute aggregation buckets and
+ * in-memory request_logs queries.
  *
- * Analytics buckets are stored under `analytics:<padded-minute>:<card>:<channel>:<key>`
- * so a prefix list yields time-ordered buckets. SQL GROUP BY / SUM are computed
+ * Analytics buckets are stored under `analytics/<padded-minute>/<card>/<channel>/<key>`
+ * so a prefix scan yields time-ordered buckets. SQL GROUP BY / SUM are computed
  * in memory over the selected window.
  */
 
 import { ANALYTICS_PREFIX, analyticsKey, KEY_PREFIX, requestLogKey } from '../kv/keys.ts';
-import { kvDelete, kvGetJson, kvListJson, kvPutJson } from '../kv/store.ts';
+import { kvDelete, kvGetJson, kvListJson, kvPutJson, kvUpdateJson } from '../kv/store.ts';
 import { getSetting } from './settings.ts';
 import type { RequestLogRecord, RequestLogStatus } from './requests.ts';
 
@@ -48,7 +48,7 @@ export interface AnalyticsBucketRecord extends AnalyticsDelta {
 }
 
 export async function upsertAnalyticsMinute(
-  db: KVNamespace,
+  db: BlobStore,
   bucket: {
     timestamp_minute: number;
     model_card_id: string;
@@ -65,8 +65,9 @@ export async function upsertAnalyticsMinute(
     bucket.channel_id,
     bucket.key_id,
   );
-  const existing = await kvGetJson<AnalyticsBucketRecord>(db, key);
-  const next: AnalyticsBucketRecord = {
+  // No atomic increment on Blob storage: read the bucket document, add the
+  // delta, and write it back with retry (see `kvUpdateJson`).
+  await kvUpdateJson<AnalyticsBucketRecord>(db, key, (existing) => ({
     timestamp_minute: bucket.timestamp_minute,
     model_card_id: bucket.model_card_id,
     channel_id: bucket.channel_id,
@@ -88,8 +89,7 @@ export async function upsertAnalyticsMinute(
     latency_ms_count: (existing?.latency_ms_count ?? 0) + delta.latency_ms_count,
     ttft_ms_sum: (existing?.ttft_ms_sum ?? 0) + delta.ttft_ms_sum,
     ttft_ms_count: (existing?.ttft_ms_count ?? 0) + delta.ttft_ms_count,
-  };
-  await kvPutJson(db, key, next);
+  }));
 }
 
 // ---- Analytics Usage Query ----
@@ -187,7 +187,7 @@ function toSummary(agg: Aggregate): AnalyticsUsageSummary {
 }
 
 export async function queryAnalyticsUsage(
-  db: KVNamespace,
+  db: BlobStore,
   params: {
     start: number;
     end: number;
@@ -263,7 +263,7 @@ export async function queryAnalyticsUsage(
   return { summary: toSummary(summaryAgg), models, trends };
 }
 
-// ---- Cursor-paginated log queries ----
+// ---- Request-log queries (in-memory over a prefix scan) ----
 
 export interface LogQueryParams {
   limit: number;
@@ -283,7 +283,7 @@ export interface LogQueryResult {
 }
 
 export async function queryLogsCursor(
-  db: KVNamespace,
+  db: BlobStore,
   params: LogQueryParams,
 ): Promise<LogQueryResult> {
   const limit = Math.min(Math.max(params.limit, 1), 100);
@@ -323,21 +323,21 @@ export async function queryLogsCursor(
 }
 
 export async function getLogById(
-  db: KVNamespace,
+  db: BlobStore,
   id: string,
 ): Promise<Record<string, unknown> | null> {
   const row = await kvGetJson<RequestLogRecord>(db, requestLogKey(id));
   return row ?? null;
 }
 
-export async function clearAllLogs(db: KVNamespace): Promise<number> {
+export async function clearAllLogs(db: BlobStore): Promise<number> {
   const records = await kvListJson<RequestLogRecord>(db, KEY_PREFIX.requestLog);
   await Promise.all(records.map((row) => kvDelete(db, requestLogKey(row.id))));
   return records.length;
 }
 
 export async function cleanupAnalytics(
-  db: KVNamespace,
+  db: BlobStore,
   retentionDays: number,
 ): Promise<number> {
   const cutoff = Math.floor((Date.now() - retentionDays * 86_400_000) / 300_000) * 300;
@@ -353,7 +353,7 @@ export async function cleanupAnalytics(
 
 /** Nullify context columns older than retentionHours to enforce privacy window. */
 export async function cleanupContext(
-  db: KVNamespace,
+  db: BlobStore,
   retentionHours: number,
 ): Promise<number> {
   const cutoff = Math.floor((Date.now() - retentionHours * 3_600_000) / 1000);
@@ -378,8 +378,8 @@ export async function cleanupContext(
   return updated;
 }
 
-/** Read analytics settings from KV settings in a bounded set of gets. */
-export async function readAnalyticsSettings(db: KVNamespace): Promise<{
+/** Read analytics settings from Blob settings in a bounded set of gets. */
+export async function readAnalyticsSettings(db: BlobStore): Promise<{
   requestLogsEnabled: boolean;
   logSuccess: boolean;
   logErrors: boolean;

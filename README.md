@@ -33,7 +33,7 @@ Apps / SDKs
 MyGateway Edge Function ── authentication & limits ── routing & fallback ── AI providers
     │
     ├── SolidJS management console (static assets)
-    └── KV: configuration, usage aggregates, optional request logs
+    └── Blob: configuration, usage aggregates, optional request logs
 ```
 
 ## Features
@@ -55,7 +55,7 @@ The complete implementation status and roadmap are maintained in the [PRD](docs/
 
 Create an EdgeOne Makers project from this repository. The project installs dependencies with `npm install`, builds the console with `npm run build:dashboard`, and serves `dashboard/dist` as static assets; `functions/[[default]].ts` handles `/health`, `/v1/*`, `/admin/api/*`, and `/management/v1/*`. Every other path falls through to the console. See [`edgeone.json`](edgeone.json) for the exact build settings.
 
-Then bind a KV namespace named `DB` and add the runtime environment variables (`MASTER_KEY`, `INITIAL_ADMIN_PASSWORD`) in **Project → Environment Variables**. `MASTER_KEY` is generated once by the platform or supplied by you; it must not be changed or rotated after provider credentials are stored.
+Then bind a Blob storage binding named `DB` and add the runtime environment variables (`MASTER_KEY`, `INITIAL_ADMIN_PASSWORD`) in **Project → Environment Variables**. `MASTER_KEY` is generated once by the platform or supplied by you; it must not be changed or rotated after provider credentials are stored.
 
 Initial administrator credentials:
 
@@ -64,7 +64,7 @@ Username: admin
 Password: mygateway123
 ```
 
-You must change them after the first sign-in. Baseline settings and model prices are seeded into KV on the first backend request, so no migration step is required.
+You must change them after the first sign-in. Baseline settings and model prices are seeded into Blob storage on the first backend request, so no migration step is required.
 
 See the [deployment guide](docs/DEPLOY.en.md) for upgrades, rollback, troubleshooting, and quota planning.
 
@@ -80,7 +80,7 @@ cp .env.example .env
 npm run dev
 ```
 
-`npm run dev` starts the console dev server at <http://localhost:5173>. The gateway backend runs on the edge function runtime, so the fastest way to exercise `/v1/*`, `/admin/api/*`, and `/management/v1/*` end to end is a preview deployment of your EdgeOne Makers project. The KV namespace bound as `DB` is seeded automatically on the first backend request.
+`npm run dev` starts the console dev server at <http://localhost:5173>. The gateway backend runs on the edge function runtime, so the fastest way to exercise `/v1/*`, `/admin/api/*`, and `/management/v1/*` end to end is a preview deployment of your EdgeOne Makers project. The Blob storage bound as `DB` is seeded automatically on the first backend request.
 
 For the manual development loop and test commands, see the [contributing guide](docs/CONTRIBUTING.md). Before submitting a change, run:
 
@@ -110,7 +110,7 @@ Create an agent credential under **System → Management Keys & Skill**, then gi
 ## Current boundaries
 
 - Fallback is only possible before response bytes are committed; an active stream cannot move to another provider.
-- RPM limits and circuit state are best-effort per isolate. Daily request and Token budgets use KV as their authority.
+- RPM limits and circuit state are best-effort per isolate. Daily request and Token budgets use Blob storage as their authority.
 - Token and cost metrics depend on provider-reported usage. Estimated cost is not a provider invoice.
 - Aggregated cost currently has no currency dimension; use one accounting currency per deployment.
 - Embeddings, Images, Audio, Realtime, Batch, Files, multi-user accounts, and RBAC are not currently supported.

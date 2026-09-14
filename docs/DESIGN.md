@@ -224,7 +224,7 @@ Dashboard 刷新附带 `active=1`，不会查询停用渠道。Channels 页面�
 - 上游错误只返回清理后的说明，不回显正文或 Key；
 - 查询失败不影响渠道路由和模型请求。
 
-该能力不写 D1/KV/DO，也不由 Cron 主动执行。isolate 回收后服务端状态回到 `not_queried`；
+该能力不写 Blob 或其他共享存储，也不由 Cron 主动执行。isolate 回收后服务端状态回到 `not_queried`；
 当前浏览器会话仍保留其最后一次已解析结果，属于不增加共享状态成本的尽力缓存行为。
 
 DeepSeek 接口定义：<https://api-docs.deepseek.com/zh-cn/api/get-user-balance>。

@@ -14,9 +14,9 @@
 
 ## 不可破坏的产品约束
 
-- 默认部署保持 EdgeOne Makers 免费额度友好：一个项目（静态资源 + 边缘函数）+ 一个 KV 命名空间
+- 默认部署保持 EdgeOne Makers 免费额度友好：一个项目（静态资源 + 边缘函数）+ 一个 Blob 存储绑定
   + 环境变量，不使用定时任务。
-- 不新增额外的 KV 命名空间、R2、Queues、Durable Objects 或外部服务，除非 PRD 已明确批准。
+- 不新增额外的存储绑定、R2、Queues、Durable Objects 或外部服务，除非 PRD 已明确批准。
 - 路由保持固定优先级和原生协议优先；只能在向客户端提交响应前 Fallback。
 - Chat / Messages 只转换已覆盖的公共子集；无法无损转换时明确报错。
 - Provider Key 不得明文落库或日志；Gateway Key 只存哈希并仅展示一次。
@@ -27,7 +27,7 @@
 ## 代码地图
 
 - `src/gateway/`：数据面、鉴权 / 路由、配额、Fallback、协议转换和 usage finalizer。
-- `src/admin/`：管理 API；`src/db/`：基于 KV 的领域数据访问；`src/kv/`：键前缀与 JSON / 分页辅助；
+- `src/admin/`：管理 API；`src/db/`：基于 Blob 的领域数据访问；`src/kv/`：对象路径前缀与 JSON / 分页辅助；
   `src/shared/`：前后端共享的供应商预制等。
 - `functions/[[default]].ts`：边缘函数入口（后端路由 + 静态资源回落）；`src/maintenance/`：按需保留期清理。
 - `dashboard/src/`：SolidJS 控制台；`edgeone.json`：EdgeOne Makers 构建配置。
@@ -35,8 +35,8 @@
 
 ## 修改规则
 
-- KV 是 schema-less 存储：键前缀和键构造只能在 `src/kv/keys.ts` 维护，不要在领域模块里拼字符串。
-  唯一性约束用二级索引键（如 `gateway_key_hash:<hash>`）实现，不要退化为全量 `list` 扫描热路径。
+- Blob 存储是 schema-less 存储：对象路径前缀和键构造只能在 `src/kv/keys.ts` 维护，不要在领域模块里拼字符串。
+  唯一性约束用独立索引对象（如 `gateway_key_hash/<hash>`）实现，不要退化为全量 `list` 扫描热路径。
 - `migrations/0001_initial.sql` 是首个公开版本的不可变历史基线，运行时不执行；运行时初始数据由
   `src/db/bootstrap.ts` 幂等写入，新增基线数据只能追加到该文件并保持幂等。
 - Provider 预制只在 `src/shared/provider-presets.ts` 维护；不要在 Dashboard 复制一份。

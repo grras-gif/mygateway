@@ -109,7 +109,7 @@ describe('key quota', () => {
     expect(allowed).toEqual({ allowed: true });
     expect(fake.lookups).toBe(1);
 
-    fake.seed('key_usage:limited:2026-08-03', {
+    fake.seed('key_usage/limited/2026-08-03', {
       key_id: 'limited', date: '2026-08-03', requests: 1, input_tokens: 0, output_tokens: 0, cost_micros: 0,
     });
     resetKeyQuota(); // simulate the refresh window elapsing → re-read KV
@@ -118,7 +118,7 @@ describe('key quota', () => {
     }), now);
     expect(blocked).toEqual({ allowed: false, reason: 'request_limit' });
 
-    fake.seed('key_usage:tokens:2026-01-01', {
+    fake.seed('key_usage/tokens/2026-01-01', {
       key_id: 'tokens', date: '2026-01-01', requests: 0, input_tokens: 1_000, output_tokens: 500, cost_micros: 0,
     });
     resetKeyQuota();
@@ -197,11 +197,11 @@ describe('temporary gateway key persistence', () => {
   test('listing hides expired temporary keys without dropping regular keys', async () => {
     const nowSeconds = Math.floor(Date.now() / 1000);
     const fake = new FakeKV()
-      .seed('gateway_key:regular', keyRow({ id: 'regular', is_temporary: 0 }))
-      .seed('gateway_key:temp-live', keyRow({
+      .seed('gateway_key/regular', keyRow({ id: 'regular', is_temporary: 0 }))
+      .seed('gateway_key/temp-live', keyRow({
         id: 'temp-live', is_temporary: 1, expires_at: nowSeconds + 3_600,
       }))
-      .seed('gateway_key:temp-expired', keyRow({
+      .seed('gateway_key/temp-expired', keyRow({
         id: 'temp-expired', is_temporary: 1, expires_at: nowSeconds - 1,
       }));
 
@@ -212,17 +212,17 @@ describe('temporary gateway key persistence', () => {
   test('lazy cleanup deletes only expired server-marked temporary keys', async () => {
     const nowSeconds = Math.floor(Date.now() / 1000);
     const fake = new FakeKV()
-      .seed('gateway_key:regular', keyRow({ id: 'regular', is_temporary: 0 }))
-      .seed('gateway_key:temp-live', keyRow({
+      .seed('gateway_key/regular', keyRow({ id: 'regular', is_temporary: 0 }))
+      .seed('gateway_key/temp-live', keyRow({
         id: 'temp-live', is_temporary: 1, expires_at: nowSeconds + 3_600,
       }))
-      .seed('gateway_key:temp-expired', keyRow({
+      .seed('gateway_key/temp-expired', keyRow({
         id: 'temp-expired', is_temporary: 1, expires_at: nowSeconds - 1,
       }));
 
     expect(await cleanupExpiredTemporaryGatewayKeys(asKV(fake))).toBe(1);
-    expect(fake.store.has('gateway_key:temp-expired')).toBe(false);
-    expect(fake.store.has('gateway_key:temp-live')).toBe(true);
-    expect(fake.store.has('gateway_key:regular')).toBe(true);
+    expect(fake.store.has('gateway_key/temp-expired')).toBe(false);
+    expect(fake.store.has('gateway_key/temp-live')).toBe(true);
+    expect(fake.store.has('gateway_key/regular')).toBe(true);
   });
 });

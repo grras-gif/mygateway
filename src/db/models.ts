@@ -1,5 +1,5 @@
 /**
- * Model cards and channel model instances — KV-backed operations.
+ * Model cards and channel model instances — Blob-backed operations.
  */
 
 import { parseCandidateProtocols, type ChannelProtocol } from '../gateway/protocols.ts';
@@ -8,6 +8,7 @@ import {
   KEY_PREFIX,
   modelCardKey,
   modelIdentifierKey,
+  providerModelKey,
 } from '../kv/keys.ts';
 import { kvDelete, kvGetJson, kvListJson, kvPutJson } from '../kv/store.ts';
 import { getChannelProtocols, getChannelRow } from './channels.ts';
@@ -59,7 +60,7 @@ export interface ModelIdentifierRow {
 
 // --- Model Cards ---
 
-export async function listModelCards(db: KVNamespace): Promise<ModelCardRow[]> {
+export async function listModelCards(db: BlobStore): Promise<ModelCardRow[]> {
   const rows = await kvListJson<StoredModelCardRow>(db, KEY_PREFIX.modelCard);
   return rows
     .filter((row) => row.deleted_at === null || row.deleted_at === undefined)
@@ -67,7 +68,7 @@ export async function listModelCards(db: KVNamespace): Promise<ModelCardRow[]> {
     .map(({ deleted_at: _deletedAt, ...card }) => card);
 }
 
-export async function getModelCard(db: KVNamespace, id: string): Promise<ModelCardRow | null> {
+export async function getModelCard(db: BlobStore, id: string): Promise<ModelCardRow | null> {
   const row = await kvGetJson<StoredModelCardRow>(db, modelCardKey(id));
   if (!row || (row.deleted_at !== null && row.deleted_at !== undefined)) return null;
   const { deleted_at: _deletedAt, ...card } = row;
@@ -75,7 +76,7 @@ export async function getModelCard(db: KVNamespace, id: string): Promise<ModelCa
 }
 
 export async function createModelCard(
-  db: KVNamespace,
+  db: BlobStore,
   card: { id: string; unified_model_id: string; display_name: string; status?: string },
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
@@ -92,7 +93,7 @@ export async function createModelCard(
 }
 
 export async function updateModelCard(
-  db: KVNamespace,
+  db: BlobStore,
   id: string,
   updates: { display_name?: string; status?: string },
 ): Promise<void> {
@@ -104,7 +105,7 @@ export async function updateModelCard(
   await kvPutJson(db, modelCardKey(id), row);
 }
 
-export async function softDeleteModelCard(db: KVNamespace, id: string): Promise<void> {
+export async function softDeleteModelCard(db: BlobStore, id: string): Promise<void> {
   const row = await kvGetJson<StoredModelCardRow>(db, modelCardKey(id));
   if (!row) return;
   const now = Math.floor(Date.now() / 1000);
@@ -114,14 +115,14 @@ export async function softDeleteModelCard(db: KVNamespace, id: string): Promise<
 }
 
 /** Hard-delete a model card record (rollback of a partially created card). */
-export async function deleteModelCard(db: KVNamespace, id: string): Promise<void> {
+export async function deleteModelCard(db: BlobStore, id: string): Promise<void> {
   await kvDelete(db, modelCardKey(id));
 }
 
 // --- Channel Model Instances ---
 
 export async function listChannelModels(
-  db: KVNamespace,
+  db: BlobStore,
   modelCardId: string,
 ): Promise<ChannelModelRow[]> {
   const rows = await kvListJson<StoredChannelModelRow>(db, KEY_PREFIX.channelModel);
@@ -136,7 +137,7 @@ export async function listChannelModels(
 }
 
 export async function createChannelModel(
-  db: KVNamespace,
+  db: BlobStore,
   instance: Omit<ChannelModelRow, 'created_at' | 'updated_at' | 'manual_metadata_updated_at'>,
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
@@ -151,7 +152,7 @@ export async function createChannelModel(
 }
 
 export async function getChannelModelForCardChannel(
-  db: KVNamespace,
+  db: BlobStore,
   modelCardId: string,
   channelId: string,
 ): Promise<ChannelModelRow | null> {
@@ -160,7 +161,7 @@ export async function getChannelModelForCardChannel(
 }
 
 export async function reorderInstances(
-  db: KVNamespace,
+  db: BlobStore,
   modelCardId: string,
   instanceIds: string[],
 ): Promise<void> {
@@ -173,14 +174,14 @@ export async function reorderInstances(
   }
 }
 
-export async function countChannelModels(db: KVNamespace, modelCardId: string): Promise<number> {
+export async function countChannelModels(db: BlobStore, modelCardId: string): Promise<number> {
   const instances = await listChannelModels(db, modelCardId);
   return instances.length;
 }
 
 /** Update pricing / stream metadata on a single instance. */
 export async function updateChannelModelInstance(
-  db: KVNamespace,
+  db: BlobStore,
   instanceId: string,
   updates: {
     input_price_micros_per_million?: number | null;
@@ -210,13 +211,13 @@ export async function updateChannelModelInstance(
 }
 
 /** Hard-delete a single instance (rollback). */
-export async function deleteChannelModel(db: KVNamespace, instanceId: string): Promise<void> {
+export async function deleteChannelModel(db: BlobStore, instanceId: string): Promise<void> {
   await kvDelete(db, channelModelKey(instanceId));
 }
 
 /** Hard-delete every instance of a model card (rollback). */
 export async function deleteChannelModelsByModelCard(
-  db: KVNamespace,
+  db: BlobStore,
   modelCardId: string,
 ): Promise<void> {
   const rows = await kvListJson<StoredChannelModelRow>(db, KEY_PREFIX.channelModel);
@@ -229,7 +230,7 @@ export async function deleteChannelModelsByModelCard(
 
 /** Soft-delete every instance of a model card (admin model delete). */
 export async function softDeleteChannelModelsByModelCard(
-  db: KVNamespace,
+  db: BlobStore,
   modelCardId: string,
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
@@ -245,26 +246,26 @@ export async function softDeleteChannelModelsByModelCard(
 // --- Model Identifiers ---
 
 export async function resolveIdentifier(
-  db: KVNamespace,
+  db: BlobStore,
   identifier: string,
 ): Promise<ModelIdentifierRow | null> {
   return kvGetJson<ModelIdentifierRow>(db, modelIdentifierKey(identifier));
 }
 
 export async function createIdentifier(
-  db: KVNamespace,
+  db: BlobStore,
   ident: ModelIdentifierRow,
 ): Promise<void> {
   await kvPutJson(db, modelIdentifierKey(ident.identifier), ident);
 }
 
-export async function deleteIdentifier(db: KVNamespace, identifier: string): Promise<void> {
+export async function deleteIdentifier(db: BlobStore, identifier: string): Promise<void> {
   await kvDelete(db, modelIdentifierKey(identifier));
 }
 
 /** Delete every identifier that belongs to a model card. */
 export async function deleteIdentifiersByModelCard(
-  db: KVNamespace,
+  db: BlobStore,
   modelCardId: string,
 ): Promise<void> {
   const rows = await kvListJson<ModelIdentifierRow>(db, KEY_PREFIX.modelIdentifier);
@@ -279,7 +280,7 @@ export async function deleteIdentifiersByModelCard(
  * Full cascade used by the admin model delete: free the unified id, drop
  * identifiers, soft-delete instances, and detach provider-model imports.
  */
-export async function deleteModelCardCascade(db: KVNamespace, id: string): Promise<void> {
+export async function deleteModelCardCascade(db: BlobStore, id: string): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   await deleteIdentifiersByModelCard(db, id);
 
@@ -304,7 +305,7 @@ export async function deleteModelCardCascade(db: KVNamespace, id: string): Promi
     providerModel.updated_at = now;
     await kvPutJson(
       db,
-      `${KEY_PREFIX.providerModel}${providerModel.channel_id}:${providerModel.provider_model_id}`,
+      providerModelKey(providerModel.channel_id, providerModel.provider_model_id),
       providerModel,
     );
   }
@@ -343,7 +344,7 @@ export function hydrateCandidate(row: CandidateQueryRow): CandidateRow {
 }
 
 async function buildCandidate(
-  db: KVNamespace,
+  db: BlobStore,
   instance: ChannelModelRow,
 ): Promise<CandidateRow | null> {
   const channel = await getChannelRow(db, instance.channel_id);
@@ -374,7 +375,7 @@ async function buildCandidate(
  * Get all enabled candidates for a model card, joined with channel info.
  */
 export async function getCandidatesForModel(
-  db: KVNamespace,
+  db: BlobStore,
   modelCardId: string,
 ): Promise<CandidateRow[]> {
   const instances = (await listChannelModels(db, modelCardId))
@@ -398,7 +399,7 @@ export interface ResolvedRoute {
  * is empty so callers can distinguish unknown from temporarily unavailable.
  */
 export async function resolveRoute(
-  db: KVNamespace,
+  db: BlobStore,
   identifier: string,
 ): Promise<ResolvedRoute | null> {
   const ident = await resolveIdentifier(db, identifier);

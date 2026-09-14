@@ -1,4 +1,4 @@
-/** Signed administrator session cookie with KV-backed invalidation. */
+/** Signed administrator session cookie with Blob-backed invalidation. */
 
 import { getAdminById } from '../db/admin-users.ts';
 
@@ -97,7 +97,7 @@ export async function createAdminSession(
 
 export async function validateAdminSession(
   request: Request,
-  db: KVNamespace,
+  db: BlobStore,
   masterKey: string,
 ): Promise<AdminSession | null> {
   const cookie = (request.headers.get('cookie') ?? '')

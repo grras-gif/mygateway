@@ -12,7 +12,7 @@ const envOf = (fake: FakeKV) => ({ DB: asKV(fake), MASTER_KEY } as unknown as En
 /** Every stored request log record. */
 function logRecords(fake: FakeKV): Array<Record<string, unknown>> {
   return [...fake.store.entries()]
-    .filter(([key]) => key.startsWith('request_log:'))
+    .filter(([key]) => key.startsWith('request_log/'))
     .map(([, value]) => JSON.parse(value) as Record<string, unknown>);
 }
 
@@ -63,14 +63,14 @@ describe('log policy', () => {
 
   test('invalidateLogPolicyCache forces a re-read after an admin update', async () => {
     const fake = new FakeKV()
-      .seed('setting:request_logs_enabled', { value: 'true', updated_at: 1 })
-      .seed('setting:log_success', { value: 'true', updated_at: 1 })
-      .seed('setting:log_errors', { value: 'true', updated_at: 1 })
-      .seed('setting:log_context', { value: 'false', updated_at: 1 });
+      .seed('setting/request_logs_enabled', { value: 'true', updated_at: 1 })
+      .seed('setting/log_success', { value: 'true', updated_at: 1 })
+      .seed('setting/log_errors', { value: 'true', updated_at: 1 })
+      .seed('setting/log_context', { value: 'false', updated_at: 1 });
     const db = asKV(fake);
 
     expect((await readLogPolicy(db)).logErrors).toBe(true);
-    fake.seed('setting:log_errors', { value: 'false', updated_at: 2 });
+    fake.seed('setting/log_errors', { value: 'false', updated_at: 2 });
     // cached → still true
     expect((await readLogPolicy(db)).logErrors).toBe(true);
     invalidateLogPolicyCache();
@@ -89,8 +89,8 @@ describe('usage recorder level gating', () => {
       12,
     );
     expect(logRecords(fake)).toHaveLength(0);
-    expect(hasPrefix(fake, 'analytics:')).toBe(true);
-    expect(hasPrefix(fake, 'key_usage:')).toBe(true);
+    expect(hasPrefix(fake, 'analytics/')).toBe(true);
+    expect(hasPrefix(fake, 'key_usage/')).toBe(true);
   });
 
   test('error rows are skipped when log_errors is off', async () => {
@@ -104,7 +104,7 @@ describe('usage recorder level gating', () => {
       'upstream_http_500: boom',
     );
     expect(logRecords(fake)).toHaveLength(0);
-    expect(hasPrefix(fake, 'analytics:')).toBe(true);
+    expect(hasPrefix(fake, 'analytics/')).toBe(true);
   });
 
   test('all log rows skipped when request_logs_enabled is off', async () => {
@@ -117,8 +117,8 @@ describe('usage recorder level gating', () => {
       12,
     );
     expect(logRecords(fake)).toHaveLength(0);
-    expect(hasPrefix(fake, 'analytics:')).toBe(true);
-    expect(hasPrefix(fake, 'key_usage:')).toBe(true);
+    expect(hasPrefix(fake, 'analytics/')).toBe(true);
+    expect(hasPrefix(fake, 'key_usage/')).toBe(true);
   });
 
   test('error_detail is stored with error rows when enabled', async () => {
@@ -173,8 +173,8 @@ describe('usage recorder level gating', () => {
     );
     // analytics + key_daily_usage are always written; no request log.
     expect(logRecords(fake)).toHaveLength(0);
-    expect(hasPrefix(fake, 'analytics:')).toBe(true);
-    expect(hasPrefix(fake, 'key_usage:')).toBe(true);
+    expect(hasPrefix(fake, 'analytics/')).toBe(true);
+    expect(hasPrefix(fake, 'key_usage/')).toBe(true);
   });
 
   test('provider cache hits are aggregated separately from total input tokens', async () => {
@@ -186,7 +186,7 @@ describe('usage recorder level gating', () => {
       { inputTokens: 100, cacheTokens: 40, outputTokens: 25 },
       200,
     );
-    const analytics = firstRecord(fake, 'analytics:');
+    const analytics = firstRecord(fake, 'analytics/');
     expect(analytics).toBeDefined();
     expect(analytics!.input_tokens).toBe(100);
     expect(analytics!.cache_input_tokens).toBe(40);
@@ -202,7 +202,7 @@ describe('usage recorder level gating', () => {
       { inputTokens: 50, outputTokens: 30 },
       500,
     );
-    const analytics = firstRecord(fake, 'analytics:');
+    const analytics = firstRecord(fake, 'analytics/');
     expect(analytics).toBeDefined();
     expect(analytics!.ttft_ms_sum).toBe(345);
     expect(analytics!.ttft_ms_count).toBe(1);
@@ -217,7 +217,7 @@ describe('usage recorder level gating', () => {
       { inputTokens: 50, outputTokens: 30 },
       500,
     );
-    const analytics = firstRecord(fake, 'analytics:');
+    const analytics = firstRecord(fake, 'analytics/');
     expect(analytics).toBeDefined();
     expect(analytics!.ttft_ms_sum).toBe(0);
     expect(analytics!.ttft_ms_count).toBe(0);
@@ -259,8 +259,8 @@ describe('usage recorder level gating', () => {
       { inputTokens: 10, outputTokens: 5 },
       12,
     );
-    expect(hasPrefix(fake, 'analytics:')).toBe(true);
-    expect(hasPrefix(fake, 'key_usage:')).toBe(true);
+    expect(hasPrefix(fake, 'analytics/')).toBe(true);
+    expect(hasPrefix(fake, 'key_usage/')).toBe(true);
     expect(logRecords(fake)).toHaveLength(1);
   });
 
@@ -273,8 +273,8 @@ describe('usage recorder level gating', () => {
       { inputTokens: 10, outputTokens: 5 },
       12,
     );
-    expect(hasPrefix(fake, 'analytics:')).toBe(true);
-    expect(hasPrefix(fake, 'key_usage:')).toBe(true);
+    expect(hasPrefix(fake, 'analytics/')).toBe(true);
+    expect(hasPrefix(fake, 'key_usage/')).toBe(true);
     expect(logRecords(fake)).toHaveLength(0);
   });
 
@@ -288,8 +288,8 @@ describe('usage recorder level gating', () => {
       defaultPolicy(),
       'rpm_limit_exceeded',
     );
-    expect(hasPrefix(fake, 'analytics:')).toBe(true);
-    expect(hasPrefix(fake, 'key_usage:')).toBe(false);
+    expect(hasPrefix(fake, 'analytics/')).toBe(true);
+    expect(hasPrefix(fake, 'key_usage/')).toBe(false);
     expect(logRecords(fake)).toHaveLength(1);
   });
 
@@ -303,7 +303,7 @@ describe('usage recorder level gating', () => {
       { ...defaultPolicy(), logsEnabled: false },
       'rpm_limit_exceeded',
     );
-    expect(hasPrefix(fake, 'analytics:')).toBe(true);
+    expect(hasPrefix(fake, 'analytics/')).toBe(true);
     expect(logRecords(fake)).toHaveLength(0);
   });
 

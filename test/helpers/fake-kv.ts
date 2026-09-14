@@ -1,13 +1,14 @@
 /**
- * Minimal in-memory KV namespace for unit tests.
+ * Minimal in-memory Blob store for unit tests.
  *
- * `FakeKV` keeps a raw `Map<string, string>` plus counters so tests can assert
- * how many reads (`get`) and list lookups (`list`) a code path performed.
- * `asKV` adapts it to the `KVNamespace` shape used by the domain modules.
+ * `FakeKV` keeps a raw `Map<string, string>` of object paths plus counters so
+ * tests can assert how many reads (`get`) and list lookups (`list`) a code path
+ * performed. `asKV` adapts it to the `BlobStore` shape used by the domain
+ * modules.
  */
 
 export class FakeKV {
-  /** Raw string store keyed by full KV key. */
+  /** Raw string store keyed by full object path. */
   readonly store = new Map<string, string>();
 
   /** Number of `get` calls. */
@@ -28,15 +29,15 @@ export class FakeKV {
     return this;
   }
 
-  /** Seed a raw string value (for index keys that store bare ids). */
+  /** Seed a raw string value (for index objects that store bare ids). */
   seedRaw(key: string, value: string): this {
     this.store.set(key, value);
     return this;
   }
 }
 
-/** Adapt a `FakeKV` to the `KVNamespace` interface used by domain modules. */
-export function asKV(fake: FakeKV): KVNamespace {
+/** Adapt a `FakeKV` to the `BlobStore` interface used by domain modules. */
+export function asKV(fake: FakeKV): BlobStore {
   return {
     async get(key: string): Promise<string | null> {
       fake.reads += 1;
@@ -50,17 +51,13 @@ export function asKV(fake: FakeKV): KVNamespace {
       fake.deletes += 1;
       fake.store.delete(key);
     },
-    async list(options?: KVListOptions): Promise<KVListResult> {
+    async list(options?: BlobListOptions): Promise<BlobListResult> {
       fake.lookups += 1;
       const prefix = options?.prefix ?? '';
-      const names = [...fake.store.keys()]
+      const objects = [...fake.store.keys()]
         .filter((name) => name.startsWith(prefix))
-        .sort();
-      return {
-        keys: names.map((name) => ({ name })),
-        list_complete: true,
-        cursor: undefined,
-      };
+        .map((key) => ({ key }));
+      return { objects };
     },
-  } as unknown as KVNamespace;
+  } as unknown as BlobStore;
 }

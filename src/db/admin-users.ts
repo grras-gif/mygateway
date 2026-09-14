@@ -16,23 +16,23 @@ export interface AdminUserRow {
   last_login_at: number | null;
 }
 
-export async function getAdminByUsername(db: KVNamespace, username: string): Promise<AdminUserRow | null> {
+export async function getAdminByUsername(db: BlobStore, username: string): Promise<AdminUserRow | null> {
   const id = await db.get(adminUserByNameKey(username));
   if (!id) return null;
   return getAdminById(db, id);
 }
 
-export async function getAdminById(db: KVNamespace, id: string): Promise<AdminUserRow | null> {
+export async function getAdminById(db: BlobStore, id: string): Promise<AdminUserRow | null> {
   return kvGetJson<AdminUserRow>(db, adminUserKey(id));
 }
 
-export async function hasAdminUser(db: KVNamespace): Promise<boolean> {
+export async function hasAdminUser(db: BlobStore): Promise<boolean> {
   const keys = await kvListKeys(db, KEY_PREFIX.adminUser);
   return keys.length > 0;
 }
 
 export async function createInitialAdmin(
-  db: KVNamespace,
+  db: BlobStore,
   username: string,
   digest: PasswordDigest,
 ): Promise<AdminUserRow> {
@@ -55,7 +55,7 @@ export async function createInitialAdmin(
   return row;
 }
 
-export async function recordAdminLogin(db: KVNamespace, id: string): Promise<void> {
+export async function recordAdminLogin(db: BlobStore, id: string): Promise<void> {
   const row = await getAdminById(db, id);
   if (!row) return;
   row.last_login_at = Math.floor(Date.now() / 1000);
@@ -63,7 +63,7 @@ export async function recordAdminLogin(db: KVNamespace, id: string): Promise<voi
 }
 
 export async function updateAdminCredentials(
-  db: KVNamespace,
+  db: BlobStore,
   id: string,
   username: string,
   digest: PasswordDigest,

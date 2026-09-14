@@ -1,12 +1,12 @@
 /**
- * Per-key daily usage aggregation and recent request spend logs (KV-backed).
+ * Per-key daily usage aggregation and recent request spend logs (Blob-backed).
  *
- * Each `(key_id, date)` authority row is a single KV entry so the period
- * budget check is a bounded prefix list instead of a SQL range scan.
+ * Each `(key_id, date)` authority row is a single Blob object so the period
+ * budget check is a bounded prefix scan instead of a SQL range scan.
  */
 
 import { keyUsageKey, keyUsagePrefix, parseKeyUsageKey, requestLogKey, KEY_PREFIX } from '../kv/keys.ts';
-import { kvDelete, kvGetJson, kvListJson, kvListKeys, kvPutJson } from '../kv/store.ts';
+import { kvDelete, kvGetJson, kvListJson, kvListKeys, kvPutJson, kvUpdateJson } from '../kv/store.ts';
 
 export interface KeyDailyUsage {
   requests: number;
@@ -38,7 +38,7 @@ function toUsage(row: StoredKeyUsage | null): KeyDailyUsage {
 }
 
 export async function readKeyDailyUsage(
-  db: KVNamespace,
+  db: BlobStore,
   keyId: string,
   date: string,
 ): Promise<KeyDailyUsage> {
@@ -48,10 +48,10 @@ export async function readKeyDailyUsage(
 
 /**
  * Sum the daily authority rows for one half-open UTC calendar window.
- * The `key_usage:<keyId>:` prefix makes this a bounded list.
+ * The `key_usage/<keyId>/` prefix makes this a bounded list.
  */
 export async function readKeyPeriodUsage(
-  db: KVNamespace,
+  db: BlobStore,
   keyId: string,
   startDate: string,
   endDate: string,
@@ -69,22 +69,22 @@ export async function readKeyPeriodUsage(
 }
 
 export async function upsertKeyDailyUsage(
-  db: KVNamespace,
+  db: BlobStore,
   keyId: string,
   date: string,
   delta: { requests: number; inputTokens: number; outputTokens: number; costMicros: number },
 ): Promise<void> {
   const key = keyUsageKey(keyId, date);
-  const existing = await kvGetJson<StoredKeyUsage>(db, key);
-  const next: StoredKeyUsage = {
+  // No atomic increment on Blob storage: read the daily authority row, add the
+  // delta, and write it back with retry (see `kvUpdateJson`).
+  await kvUpdateJson<StoredKeyUsage>(db, key, (existing) => ({
     key_id: keyId,
     date,
     requests: Number(existing?.requests ?? 0) + delta.requests,
     input_tokens: Number(existing?.input_tokens ?? 0) + delta.inputTokens,
     output_tokens: Number(existing?.output_tokens ?? 0) + delta.outputTokens,
     cost_micros: Number(existing?.cost_micros ?? 0) + delta.costMicros,
-  };
-  await kvPutJson(db, key, next);
+  }));
 }
 
 export type RequestLogStatus =
@@ -96,7 +96,7 @@ export type RequestLogStatus =
   | 'not_allowed'
   | 'expired';
 
-/** Request-log records are stored under `request_log:<id>`. */
+/** Request-log records are stored under `request_log/<id>`. */
 export interface RequestLogRecord extends Record<string, unknown> {
   id: string;
   timestamp: number;
@@ -127,12 +127,12 @@ export interface RequestLogRecord extends Record<string, unknown> {
   context_response_ciphertext?: string | null;
 }
 
-export async function putRequestLog(db: KVNamespace, record: RequestLogRecord): Promise<void> {
+export async function putRequestLog(db: BlobStore, record: RequestLogRecord): Promise<void> {
   await kvPutJson(db, requestLogKey(record.id), record);
 }
 
 export async function cleanupRequestLogs(
-  db: KVNamespace,
+  db: BlobStore,
   retentionDays: number,
 ): Promise<number> {
   const cutoff = Math.floor((Date.now() - retentionDays * 86_400_000) / 1000);
@@ -142,7 +142,7 @@ export async function cleanupRequestLogs(
   return expired.length;
 }
 
-export async function cleanupKeyDailyUsage(db: KVNamespace, retentionDays: number): Promise<number> {
+export async function cleanupKeyDailyUsage(db: BlobStore, retentionDays: number): Promise<number> {
   const cutoff = utcDateString(Date.now() - retentionDays * 86_400_000);
   const keys = await kvListKeys(db, KEY_PREFIX.keyUsage);
   let removed = 0;

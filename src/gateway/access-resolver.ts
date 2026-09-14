@@ -44,7 +44,7 @@ export interface GatewayAccessMetrics {
   cacheStatus: 'hit' | 'partial' | 'miss';
   keyCache: 'hit' | 'miss';
   modelCache: 'hit' | 'miss' | 'skipped';
-  /** Number of KV lookups performed on this call (kept name for log compatibility). */
+  /** Number of Blob lookups performed on this call (field name kept for log compatibility). */
   d1Statements: number;
   d1Ms: number;
   accessMs: number;
@@ -100,7 +100,7 @@ function cacheModel(modelName: string, value: ModelResolution): void {
 }
 
 export async function authenticateGatewayKeyHash(
-  db: KVNamespace,
+  db: BlobStore,
   keyHash: string,
 ): Promise<GatewayKeyIdentity | null> {
   const cached = keyCache.get(keyHash);
@@ -117,7 +117,7 @@ export async function authenticateGatewayKeyHash(
  * in parallel on a full cache miss; partial misses only fetch the missing value.
  */
 export async function resolveGatewayAccess(
-  db: KVNamespace,
+  db: BlobStore,
   keyHash: string,
   modelName: string,
 ): Promise<GatewayAccessResult> {

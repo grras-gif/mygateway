@@ -1,11 +1,18 @@
 /**
  * Request accounting: aggregate analytics, per-key daily usage, and optional
- * request log are written to KV inside waitUntil so the upstream response is
- * never blocked.
+ * request log are written to Blob storage inside waitUntil so the upstream
+ * response is never blocked.
  *
  * Analytics (5-min buckets) and key_daily_usage are always recorded.
  * request_logs is gated by the master switch and level policy.
  * Context is encrypted only when log_context is explicitly enabled.
+ *
+ * Blob storage has no atomic increment, so the accumulator documents
+ * (`analytics/<minute>/…` and `key_usage/<key>/<date>`) are updated with a
+ * read-modify-write. To keep the write rate — and therefore the cross-isolate
+ * race window — small, the isolate keeps its own in-memory ledger
+ * (`bumpKeyQuotaLedger`) for budget enforcement and writes each authority
+ * document once per completed request.
  */
 
 import { Env } from '../env.ts';
@@ -73,7 +80,7 @@ function emptyDelta(): AnalyticsDelta {
   };
 }
 
-/** Write analytics + key usage + optional log to KV. */
+/** Write analytics + key usage + optional log to Blob storage. */
 export async function recordRequestCompletion(
   env: Env,
   ctx: UsageRecordContext,

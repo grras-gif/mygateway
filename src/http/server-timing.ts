@@ -17,7 +17,7 @@ export function applyServerTiming(response: Response, timing: GatewayResponseTim
     metrics.push(`gateway-cache;desc="${timing.access.cacheStatus}"`);
     metrics.push(`gateway-access;dur=${duration(timing.access.accessMs)}`);
     // The `gateway-d1` metric name is kept for log/header compatibility; the
-    // value is now the KV lookup duration of the access resolution step.
+    // value is now the Blob lookup duration of the access resolution step.
     metrics.push(`gateway-d1;dur=${duration(timing.access.d1Ms)}`);
   }
   if (timing.upstreamTtfbMs !== undefined) {

@@ -1,5 +1,5 @@
 /**
- * Gateway API Key operations, including virtual-key limits (KV-backed).
+ * Gateway API Key operations, including virtual-key limits (Blob-backed).
  */
 
 import type { LimitPeriod } from '../shared/key-limits.ts';
@@ -103,7 +103,7 @@ function isVisible(row: GatewayKeyRow, nowSeconds: number): boolean {
   return row.expires_at > nowSeconds;
 }
 
-export async function listGatewayKeys(db: KVNamespace): Promise<GatewayKeyRow[]> {
+export async function listGatewayKeys(db: BlobStore): Promise<GatewayKeyRow[]> {
   const now = Math.floor(Date.now() / 1000);
   const rows = await kvListJson<GatewayKeyRow>(db, KEY_PREFIX.gatewayKey);
   return rows
@@ -112,7 +112,7 @@ export async function listGatewayKeys(db: KVNamespace): Promise<GatewayKeyRow[]>
 }
 
 export async function createGatewayKey(
-  db: KVNamespace,
+  db: BlobStore,
   key: {
     id: string;
     name: string;
@@ -149,11 +149,11 @@ export async function createGatewayKey(
   await db.put(gatewayKeyByHashKey(key.key_hash), key.id);
 }
 
-export async function getGatewayKey(db: KVNamespace, id: string): Promise<GatewayKeyRow | null> {
+export async function getGatewayKey(db: BlobStore, id: string): Promise<GatewayKeyRow | null> {
   return kvGetJson<GatewayKeyRow>(db, gatewayKeyKey(id));
 }
 
-export async function cleanupExpiredTemporaryGatewayKeys(db: KVNamespace): Promise<number> {
+export async function cleanupExpiredTemporaryGatewayKeys(db: BlobStore): Promise<number> {
   const now = Math.floor(Date.now() / 1000);
   const rows = await kvListJson<GatewayKeyRow>(db, KEY_PREFIX.gatewayKey);
   const expired = rows.filter(
@@ -170,7 +170,7 @@ export async function cleanupExpiredTemporaryGatewayKeys(db: KVNamespace): Promi
  * Lookup an active key by its hash. Used for gateway auth.
  */
 export async function findActiveKeyByHash(
-  db: KVNamespace,
+  db: BlobStore,
   keyHash: string,
 ): Promise<Pick<GatewayKeyRow, 'id' | 'name'> | null> {
   const id = await db.get(gatewayKeyByHashKey(keyHash));
@@ -182,7 +182,7 @@ export async function findActiveKeyByHash(
 
 /** Key identity used by the gateway hot path (single hash lookup). */
 export async function getGatewayKeyIdentityByHash(
-  db: KVNamespace,
+  db: BlobStore,
   keyHash: string,
 ): Promise<GatewayKeyLimits & { id: string; name: string } | null> {
   const id = await db.get(gatewayKeyByHashKey(keyHash));
@@ -202,7 +202,7 @@ export async function getGatewayKeyIdentityByHash(
 }
 
 export async function updateGatewayKeyStatus(
-  db: KVNamespace,
+  db: BlobStore,
   id: string,
   status: 'active' | 'disabled',
 ): Promise<void> {
@@ -213,7 +213,7 @@ export async function updateGatewayKeyStatus(
   await kvPutJson(db, gatewayKeyKey(id), row);
 }
 
-export async function updateGatewayKeyName(db: KVNamespace, id: string, name: string): Promise<void> {
+export async function updateGatewayKeyName(db: BlobStore, id: string, name: string): Promise<void> {
   const row = await getGatewayKey(db, id);
   if (!row) return;
   row.name = name;
@@ -222,7 +222,7 @@ export async function updateGatewayKeyName(db: KVNamespace, id: string, name: st
 }
 
 export async function updateGatewayKeyLimits(
-  db: KVNamespace,
+  db: BlobStore,
   id: string,
   limits: {
     rpm_limit?: number | null;
@@ -245,7 +245,7 @@ export async function updateGatewayKeyLimits(
   await kvPutJson(db, gatewayKeyKey(id), row);
 }
 
-export async function revokeGatewayKey(db: KVNamespace, id: string): Promise<void> {
+export async function revokeGatewayKey(db: BlobStore, id: string): Promise<void> {
   const row = await getGatewayKey(db, id);
   if (!row) return;
   const now = Math.floor(Date.now() / 1000);
@@ -258,7 +258,7 @@ export async function revokeGatewayKey(db: KVNamespace, id: string): Promise<voi
 /**
  * Hard-delete a gateway key. Used for admin DELETE.
  */
-export async function deleteGatewayKey(db: KVNamespace, id: string): Promise<void> {
+export async function deleteGatewayKey(db: BlobStore, id: string): Promise<void> {
   const row = await getGatewayKey(db, id);
   if (!row) return;
   await kvDelete(db, gatewayKeyKey(id));

@@ -1,12 +1,13 @@
 /**
  * Edge function Env bindings and runtime configuration.
  *
- * `DB` is the KV namespace that replaced the previous Cloudflare D1 database.
- * Static assets are served by the EdgeOne Makers platform through
- * `context.next()`, so there is no assets binding.
+ * `DB` is the EdgeOne Makers Blob storage binding that replaced the previous
+ * Cloudflare D1 database and KV namespace. Static assets are served by the
+ * EdgeOne Makers platform through `context.next()`, so there is no assets
+ * binding.
  */
 export interface Env {
-  DB: KVNamespace;
+  DB: BlobStore;
 
   /** Initial admin username. Defaults to admin. */
   INITIAL_ADMIN_USERNAME?: string;
@@ -39,8 +40,8 @@ export interface Env {
   USAGE_RETENTION_DAYS?: string;
 
   /**
-   * How often a key's period quota re-reads KV, in ms. Between refreshes the
-   * isolate adds its own completed requests locally. Default: 30000
+   * How often a key's period quota re-reads Blob storage, in ms. Between
+   * refreshes the isolate adds its own completed requests locally. Default: 30000
    */
   KEY_QUOTA_REFRESH_MS?: string;
 }

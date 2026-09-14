@@ -83,18 +83,18 @@ const PROTOCOL = {
 
 function seededFake(): FakeKV {
   return new FakeKV()
-    .seedRaw('gateway_key_hash:hash-1', 'key-1')
-    .seed('gateway_key:key-1', KEY_ROW)
-    .seed('model_identifier:unified-model', {
+    .seedRaw('gateway_key_hash/hash-1', 'key-1')
+    .seed('gateway_key/key-1', KEY_ROW)
+    .seed('model_identifier/unified-model', {
       identifier: 'unified-model',
       identifier_type: 'unified',
       model_card_id: 'model-card-1',
       channel_model_id: null,
     })
-    .seed('model_card:model-card-1', MODEL_CARD)
-    .seed('channel_model:channel-model-1', CHANNEL_MODEL)
-    .seed('channel:channel-1', CHANNEL)
-    .seed('channel_protocol:channel-1:openai_chat', PROTOCOL);
+    .seed('model_card/model-card-1', MODEL_CARD)
+    .seed('channel_model/channel-model-1', CHANNEL_MODEL)
+    .seed('channel/channel-1', CHANNEL)
+    .seed('channel_protocol/channel-1/openai_chat', PROTOCOL);
 }
 
 describe('gateway access resolver', () => {
@@ -183,7 +183,7 @@ describe('gateway access resolver', () => {
     });
 
     const readsBefore = fake.reads;
-    fake.seedRaw('gateway_key_hash:new-valid-hash', 'key-1');
+    fake.seedRaw('gateway_key_hash/new-valid-hash', 'key-1');
     await resolveGatewayAccess(db, 'new-valid-hash', 'unified-model');
     // Invalid callers never seed the route cache, so the new caller still reads both.
     expect(fake.reads).toBeGreaterThan(readsBefore);

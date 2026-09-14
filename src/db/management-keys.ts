@@ -30,16 +30,16 @@ export function toPublicManagementKey(row: ManagementKeyRow): ManagementKeyPubli
   };
 }
 
-export async function listManagementKeys(db: KVNamespace): Promise<ManagementKeyRow[]> {
+export async function listManagementKeys(db: BlobStore): Promise<ManagementKeyRow[]> {
   const rows = await kvListJson<ManagementKeyRow>(db, KEY_PREFIX.managementKey);
   return rows.sort((a, b) => b.created_at - a.created_at);
 }
 
-export async function getManagementKey(db: KVNamespace, id: string): Promise<ManagementKeyRow | null> {
+export async function getManagementKey(db: BlobStore, id: string): Promise<ManagementKeyRow | null> {
   return kvGetJson<ManagementKeyRow>(db, managementKeyKey(id));
 }
 
-export async function createManagementKey(db: KVNamespace, key: {
+export async function createManagementKey(db: BlobStore, key: {
   id: string;
   name: string;
   keyPrefix: string;
@@ -66,7 +66,7 @@ export async function createManagementKey(db: KVNamespace, key: {
 }
 
 export async function findActiveManagementKeyByHash(
-  db: KVNamespace,
+  db: BlobStore,
   keyHash: string,
 ): Promise<ManagementKeyRow | null> {
   const id = await db.get(managementKeyByHashKey(keyHash));
@@ -78,7 +78,7 @@ export async function findActiveManagementKeyByHash(
   return row;
 }
 
-export async function updateManagementKey(db: KVNamespace, id: string, update: {
+export async function updateManagementKey(db: BlobStore, id: string, update: {
   name?: string;
   permission?: ManagementPermission;
   status?: 'active' | 'disabled';
@@ -94,13 +94,13 @@ export async function updateManagementKey(db: KVNamespace, id: string, update: {
   await kvPutJson(db, managementKeyKey(id), row);
 }
 
-export async function deleteManagementKey(db: KVNamespace, id: string): Promise<void> {
+export async function deleteManagementKey(db: BlobStore, id: string): Promise<void> {
   const row = await getManagementKey(db, id);
   if (row) await kvDelete(db, managementKeyByHashKey(row.key_hash));
   await kvDelete(db, managementKeyKey(id));
 }
 
-export async function recordManagementAudit(db: KVNamespace, entry: {
+export async function recordManagementAudit(db: BlobStore, entry: {
   id: string;
   keyId: string;
   method: string;
@@ -126,7 +126,7 @@ export async function recordManagementAudit(db: KVNamespace, entry: {
   }
 }
 
-export async function cleanupManagementAudit(db: KVNamespace, retentionDays: number): Promise<number> {
+export async function cleanupManagementAudit(db: BlobStore, retentionDays: number): Promise<number> {
   const cutoff = Math.floor(Date.now() / 1000) - retentionDays * 86_400;
   const rows = await kvListJson<{ id: string; created_at: number }>(db, KEY_PREFIX.managementAudit);
   const expired = rows.filter((row) => row.created_at < cutoff);

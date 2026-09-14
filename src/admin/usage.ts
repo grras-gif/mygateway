@@ -1,6 +1,6 @@
 /**
- * Admin usage API handlers — reads the KV-backed analytics buckets
- * (`analytics:*`) and aggregates in memory (previously SQL over
+ * Admin usage API handlers — reads the Blob-backed analytics buckets
+ * (`analytics/*`) and aggregates in memory (previously SQL over
  * `analytics_minutes`).
  */
 

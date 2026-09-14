@@ -1,4 +1,4 @@
-/** Small per-isolate TTL/LRU cache. KV remains the source of truth. */
+/** Small per-isolate TTL/LRU cache. Blob storage remains the source of truth. */
 export class TtlLruCache<K, V> {
   private readonly entries = new Map<K, { value: V; expiresAt: number }>();
 

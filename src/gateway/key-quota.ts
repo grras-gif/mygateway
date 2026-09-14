@@ -3,9 +3,9 @@
  *
  * - RPM is a per-isolate sliding-minute window (best effort, like the passive
  *   circuit breaker — losing isolate state is safe).
- * - Period budgets are authoritative in KV (daily authority rows summed over
- *   the current natural UTC day/week/month/year). To avoid a KV
- *   read on every request, each isolate keeps a small ledger per key: a KV
+ * - Period budgets are authoritative in Blob storage (daily authority rows summed over
+ *   the current natural UTC day/week/month/year). To avoid a Blob
+ *   read on every request, each isolate keeps a small ledger per key: a Blob
  *   base snapshot refreshed every `quotaRefreshMs` plus the requests this
  *   isolate completed since the snapshot (bumped by the usage recorder).
  *   Budgets may overshoot by at most the traffic served by *other* isolates
@@ -35,7 +35,7 @@ export type QuotaReason = 'expired' | 'rpm' | 'request_limit' | 'token_limit';
 
 export type QuotaDecision = { allowed: true } | { allowed: false; reason: QuotaReason };
 
-/** Configure the KV refresh interval (from KEY_QUOTA_REFRESH_MS). */
+/** Configure the Blob refresh interval (from KEY_QUOTA_REFRESH_MS). */
 export function configureKeyQuota(refreshMs: number): void {
   quotaRefreshMs = refreshMs > 0 ? refreshMs : 30_000;
 }
@@ -89,21 +89,21 @@ function addUsage(a: KeyDailyUsage, b: KeyDailyUsage): KeyDailyUsage {
 /**
  * Called by the usage recorder after a completed request so the isolate's
  * ledger reflects work it has already done. The ledger entry keeps its
- * original expiry so the KV base still refreshes on schedule.
+ * original expiry so the Blob base still refreshes on schedule.
  */
 export function bumpKeyQuotaLedger(keyId: string, delta: KeyDailyUsage): void {
   const entry = quotaLedger.get(keyId);
-  if (!entry) return; // no active ledger → next check re-reads fresh KV anyway
+  if (!entry) return; // no active ledger → next check re-reads fresh Blob data anyway
   entry.local = addUsage(entry.local, delta);
 }
 
 /**
- * Authoritative period budget check. Limited keys read one indexed KV range
+ * Authoritative period budget check. Limited keys read one indexed Blob range
  * at most once per refresh window per isolate; between refreshes the isolate
  * adds its own completed requests to the cached snapshot.
  */
 export async function checkQuota(
-  db: KVNamespace,
+  db: BlobStore,
   key: GatewayKeyIdentity,
   nowMs: number = Date.now(),
 ): Promise<QuotaDecision> {

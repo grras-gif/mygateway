@@ -199,7 +199,7 @@ function notQueriedResult(
   };
 }
 
-/** Read current isolate cache for already-loaded channels without another KV read. */
+/** Read current isolate cache for already-loaded channels without another Blob read. */
 export function cachedProviderBalances(channels: ChannelWithProtocols[]): ProviderBalanceResult[] {
   return channels.filter(isOfficialDeepSeekChannel).map((channel) => {
     const cached = readCached(channel.id);

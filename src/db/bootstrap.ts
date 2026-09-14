@@ -1,10 +1,11 @@
 /**
- * Idempotent runtime seed for baseline KV data.
+ * Idempotent runtime seed for baseline Blob data.
  *
- * KV has no schema migration step, so the baseline system settings and the
- * editable model-price library that used to live in `migrations/0001_initial.sql`
- * are written here on the first backend request. Existing keys are never
- * overwritten, and a `bootstrap:seed` marker keeps later requests O(1).
+ * Blob storage has no schema migration step, so the baseline system settings
+ * and the editable model-price library that used to live in
+ * `migrations/0001_initial.sql` are written here on the first backend request.
+ * Existing objects are never overwritten, and a `bootstrap/seed` marker keeps
+ * later requests O(1).
  */
 
 import { bootstrapKey } from '../kv/keys.ts';
@@ -77,7 +78,7 @@ const DEFAULT_MODEL_PRICES: SeedModelPrice[] = [
  * a version marker short-circuits the work after the first successful run, and
  * existing keys are never overwritten.
  */
-export async function ensureBootstrapData(db: KVNamespace): Promise<void> {
+export async function ensureBootstrapData(db: BlobStore): Promise<void> {
   const marker = await kvGetJson<SeedMarker>(db, bootstrapKey('seed'));
   if (marker?.version === SEED_VERSION) return;
 

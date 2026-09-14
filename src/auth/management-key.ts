@@ -16,7 +16,7 @@ export function managementKeyPrefix(key: string): string {
 
 export async function authenticateManagementKey(
   request: Request,
-  db: KVNamespace,
+  db: BlobStore,
 ): Promise<ManagementKeyRow | null> {
   const raw = extractManagementKey(request);
   if (!raw) return null;

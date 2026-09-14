@@ -9,7 +9,7 @@ This directory keeps product decisions, engineering constraints, operations, and
 | Area | Document | Language | What it owns |
 |---|---|---|---|
 | Product | [PRD](PRD.md) | 中文 | Scope, implementation status, boundaries, and roadmap—the product source of truth |
-| Architecture | [Architecture](ARCHITECTURE.md) | 中文 | System boundaries, data flow, KV, caching, security, and consistency |
+| Architecture | [Architecture](ARCHITECTURE.md) | 中文 | System boundaries, data flow, Blob storage, caching, security, and consistency |
 | Design | [Detailed design](DESIGN.md) | 中文 | Protocol, provider, model, analytics, pricing, and management API decisions |
 | Providers | [Providers and models](PROVIDERS.md) | 中文 | Provider presets, model pricing baselines, and balance support |
 | Deployment | [English](DEPLOY.en.md) · [中文](DEPLOY.md) | EN / 中文 | Deployment, upgrades, rollback, troubleshooting, and quota planning |
@@ -30,7 +30,7 @@ This directory keeps product decisions, engineering constraints, operations, and
 ## Maintenance rules
 
 - `PRD.md` is the authority for user-visible behavior and roadmap status.
-- KV key shapes live in `src/kv/keys.ts`; `migrations/0001_initial.sql` is the frozen public SQL baseline and is no longer executed at runtime.
+- Blob object paths live in `src/kv/keys.ts`; `migrations/0001_initial.sql` is the frozen public SQL baseline and is no longer executed at runtime.
 - Architecture documents describe implemented structure. Design documents explain detailed decisions.
 - README files stay concise and link here instead of duplicating implementation details.
 - Update both language versions when changing bilingual public documentation.

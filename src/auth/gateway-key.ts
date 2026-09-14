@@ -1,6 +1,6 @@
 /**
  * Gateway API Key authentication.
- * Keys are stored as SHA-256 hash in KV.
+ * Keys are stored as SHA-256 hash in Blob storage.
  * Format: gw_<base64url random bytes>
  */
 

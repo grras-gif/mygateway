@@ -11,7 +11,7 @@ import { asKV, FakeKV } from './helpers/fake-kv.ts';
 function fakeSettingsDb(value: string | null) {
   const fake = new FakeKV();
   if (value !== null) {
-    fake.seed('setting:max_request_body_bytes', { value, updated_at: 1 });
+    fake.seed('setting/max_request_body_bytes', { value, updated_at: 1 });
   }
   return { db: asKV(fake), reads: () => fake.reads };
 }

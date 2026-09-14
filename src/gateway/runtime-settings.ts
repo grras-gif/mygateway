@@ -24,7 +24,7 @@ export function parseMaxRequestBodyMiB(value: unknown): number {
 }
 
 export async function readMaxRequestBytes(
-  db: KVNamespace,
+  db: BlobStore,
   deploymentFallbackBytes = DEFAULT_MAX_REQUEST_BODY_MIB * MEBIBYTE,
 ): Promise<number> {
   const cached = settingCache.get(MAX_REQUEST_BODY_SETTING);

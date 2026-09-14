@@ -1,4 +1,4 @@
-/** Channel and native protocol endpoint operations (KV-backed). */
+/** Channel and native protocol endpoint operations (Blob-backed). */
 
 import type { ChannelProtocol, GatewayProtocol, ProtocolAuthScheme } from '../gateway/protocols.ts';
 import {
@@ -72,7 +72,7 @@ export function toPublicChannel(row: ChannelWithProtocols): ChannelPublic {
 }
 
 export async function getChannelProtocols(
-  db: KVNamespace,
+  db: BlobStore,
   channelId: string,
 ): Promise<ChannelProtocol[]> {
   const rows = await kvListJson<ChannelProtocol & { channel_id: string }>(
@@ -91,13 +91,13 @@ export async function getChannelProtocols(
 
 /** Raw channel row (including soft-deleted channels). */
 export async function getChannelRow(
-  db: KVNamespace,
+  db: BlobStore,
   id: string,
 ): Promise<StoredChannelRow | null> {
   return kvGetJson<StoredChannelRow>(db, channelKey(id));
 }
 
-export async function listChannels(db: KVNamespace): Promise<ChannelWithProtocols[]> {
+export async function listChannels(db: BlobStore): Promise<ChannelWithProtocols[]> {
   const rows = await kvListJson<StoredChannelRow>(db, KEY_PREFIX.channel);
   const active = rows
     .filter((row) => row.deleted_at === null || row.deleted_at === undefined)
@@ -115,14 +115,14 @@ function stripDeleted(row: StoredChannelRow): ChannelRow {
   return channel;
 }
 
-export async function getChannel(db: KVNamespace, id: string): Promise<ChannelWithProtocols | null> {
+export async function getChannel(db: BlobStore, id: string): Promise<ChannelWithProtocols | null> {
   const row = await getChannelRow(db, id);
   if (!row || (row.deleted_at !== null && row.deleted_at !== undefined)) return null;
   return { ...stripDeleted(row), protocols: await getChannelProtocols(db, id) };
 }
 
 export async function createChannel(
-  db: KVNamespace,
+  db: BlobStore,
   channel: Omit<ChannelRow, 'created_at' | 'updated_at'>,
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
@@ -138,7 +138,7 @@ export interface ChannelProtocolInput {
 }
 
 export async function replaceChannelProtocols(
-  db: KVNamespace,
+  db: BlobStore,
   channelId: string,
   protocols: ChannelProtocolInput[],
 ): Promise<void> {
@@ -156,7 +156,7 @@ export async function replaceChannelProtocols(
 }
 
 export async function updateChannel(
-  db: KVNamespace,
+  db: BlobStore,
   id: string,
   updates: {
     name?: string;
@@ -183,7 +183,7 @@ export async function updateChannel(
   await kvPutJson(db, channelKey(id), row);
 }
 
-export async function softDeleteChannel(db: KVNamespace, id: string): Promise<void> {
+export async function softDeleteChannel(db: BlobStore, id: string): Promise<void> {
   const row = await getChannelRow(db, id);
   if (!row) return;
   const now = Math.floor(Date.now() / 1000);
@@ -195,7 +195,7 @@ export async function softDeleteChannel(db: KVNamespace, id: string): Promise<vo
 /**
  * Check if a channel is referenced by any active model instance.
  */
-export async function isChannelReferenced(db: KVNamespace, channelId: string): Promise<boolean> {
+export async function isChannelReferenced(db: BlobStore, channelId: string): Promise<boolean> {
   const instances = await kvListJson<ChannelModelLike>(db, KEY_PREFIX.channelModel);
   return instances.some(
     (instance) =>
@@ -223,7 +223,7 @@ export interface ChannelDeleteModelImpact {
 
 /** Read-only impact used before the destructive confirmation. */
 export async function getChannelDeleteImpact(
-  db: KVNamespace,
+  db: BlobStore,
   channelId: string,
 ): Promise<ChannelDeleteModelImpact[]> {
   const [instances, cards] = await Promise.all([
@@ -263,7 +263,7 @@ export async function getChannelDeleteImpact(
 
 /** Soft-delete model cards that became unroutable after a channel was removed. */
 export async function softDeleteOrphanModelCards(
-  db: KVNamespace,
+  db: BlobStore,
   modelCardIds: string[],
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
@@ -324,7 +324,7 @@ export async function softDeleteOrphanModelCards(
 /**
  * Hard-delete all model instances referencing a channel (cascade on channel delete).
  */
-export async function softDeleteInstancesByChannel(db: KVNamespace, channelId: string): Promise<void> {
+export async function softDeleteInstancesByChannel(db: BlobStore, channelId: string): Promise<void> {
   const instances = await kvListJson<ChannelModelLike>(db, KEY_PREFIX.channelModel);
   const doomed = instances.filter((instance) => instance.channel_id === channelId);
   if (doomed.length === 0) return;

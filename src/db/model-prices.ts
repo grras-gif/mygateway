@@ -1,5 +1,5 @@
 /**
- * Global model price baseline (KV-backed) — editable, used to prefill
+ * Global model price baseline (Blob-backed) — editable, used to prefill
  * channel-instance prices when a model is imported.
  */
 
@@ -19,7 +19,7 @@ export interface ModelPriceRow {
 
 /** Look up baseline prices for a batch of provider model ids. */
 export async function getModelPrices(
-  db: KVNamespace,
+  db: BlobStore,
   providerModelIds: string[],
 ): Promise<Map<string, ModelPriceRow>> {
   const map = new Map<string, ModelPriceRow>();
@@ -31,7 +31,7 @@ export async function getModelPrices(
   return map;
 }
 
-export async function listModelPrices(db: KVNamespace): Promise<ModelPriceRow[]> {
+export async function listModelPrices(db: BlobStore): Promise<ModelPriceRow[]> {
   const rows = await kvListJson<ModelPriceRow>(db, KEY_PREFIX.modelPrice);
   return rows.sort((a, b) =>
     a.provider.localeCompare(b.provider) || a.provider_model_id.localeCompare(b.provider_model_id),
@@ -39,7 +39,7 @@ export async function listModelPrices(db: KVNamespace): Promise<ModelPriceRow[]>
 }
 
 export async function upsertModelPrice(
-  db: KVNamespace,
+  db: BlobStore,
   entry: {
     provider_model_id: string;
     display_name: string;
@@ -56,6 +56,6 @@ export async function upsertModelPrice(
   });
 }
 
-export async function deleteModelPrice(db: KVNamespace, providerModelId: string): Promise<void> {
+export async function deleteModelPrice(db: BlobStore, providerModelId: string): Promise<void> {
   await kvDelete(db, modelPriceKey(providerModelId));
 }

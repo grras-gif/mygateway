@@ -15,14 +15,14 @@
 | 层级 | 性质 | 测试内容 | 固定脚本 | 主要用例 |
 |---|---|---|---|---|
 | L0 静态门禁 | 静态 | 文档链接、机器路径、类型、Dashboard 构建、部署配置 | `npm run test:fast` 的静态部分 | `scripts/check-docs.mjs`、`scripts/check-deploy-config.mjs`、TypeScript、Vite |
-| L1 单元与 KV 语义 | 白盒 | 纯函数、KV 读写与索引语义、种子、协议、缓存、配额、Token、错误边界 | `npm run test:unit` | `test/*.test.ts`（内存 `FakeKV` 替身） |
-| L2 API / 服务测试 | 灰盒 | 真实边缘函数 HTTP、Admin/Management 契约、KV 结果、权限与凭据脱敏 | `npm run test:api` | `e2e/admin-api.spec.ts`、`e2e/management-api.spec.ts` |
+| L1 单元与存储语义 | 白盒 | 纯函数、Blob 读写与索引语义、种子、协议、缓存、配额、Token、错误边界 | `npm run test:unit` | `test/*.test.ts`（内存 `FakeKV` 替身） |
+| L2 API / 服务测试 | 灰盒 | 真实边缘函数 HTTP、Admin/Management 契约、Blob 结果、权限与凭据脱敏 | `npm run test:api` | `e2e/admin-api.spec.ts`、`e2e/management-api.spec.ts` |
 | L3 UI 功能测试 | 黑盒 | 登录、导航、表单、Dialog、刷新恢复、关键响应式与确定性布局 | `npm run test:ui` | `e2e/journey.spec.ts`、`e2e/management-ui.spec.ts` |
 | L4 可控系统集成 | 黑盒 | 本地假 Provider、路由、Fallback、SSE、超时、流中断和取消传播 | `npm run test:system` | `e2e/controlled-upstream.spec.ts` |
 | L5 SIT 真实集成 | 外部黑盒 | 真实 Provider、真实 Token/usage、余额、SDK 与部署环境集成 | `npm run test:sit` | 当前 `e2e/real-provider.spec.ts`，未来按 Provider/领域拆分 |
 | L6 Agent 视觉审查 | 探索性 | 层级、留白、密度、暗色和整体审美 | 暂不提供，不作为门禁 | 未来由固定截图场景和多模态审查组成 |
 
-L2 通过公开 HTTP 契约观察结果，但会使用部署实例自身的 KV 命名空间准备和核对状态，因此称为灰盒；
+L2 通过公开 HTTP 契约观察结果，但会使用部署实例自身的 Blob 存储准备和核对状态，因此称为灰盒；
 不要把所有 API 测试称为白盒。L3 只断言用户可观察的行为，少量尺寸、重叠和视口断言用于防止确定性布局
 回归，不承担主观审美判断。
 
@@ -50,7 +50,7 @@ L2 通过公开 HTTP 契约观察结果，但会使用部署实例自身的 KV �
 | 开发中的局部反馈 | 对应单元文件或单个 Playwright 用例 | 仅用于快速定位，不代表完成 |
 | 完成一个小功能或 Bug | `npm run test:fast` | API 改动加 `test:api`；UI 加 `test:ui`；路由/流式加 `test:system` |
 | 文档或部署说明 | `npm run docs:check` + `git diff --check` | 命令变化时运行对应脚本的收集或 smoke |
-| Pull Request | `npm run test:fast` + 所有受影响层 | KV 键结构变化时用真实部署实例验证读写与分页 |
+| Pull Request | `npm run test:fast` + 所有受影响层 | Blob 对象路径变化时用真实部署实例验证读写与分页 |
 | 发布小版本 | `npm run test:release` | 任何层失败都停止发布；不得用重跑掩盖不稳定用例 |
 | 部署完成 | `npm run test:smoke -- https://部署域名` | 只有明确授权时才执行会计费的最小模型调用 |
 
@@ -74,11 +74,11 @@ Bug 修复必须在最低有效层增加回归用例。跨层缺陷可以增加�
 
 | 文件 | 覆盖重点 |
 |---|---|
-| `access-resolver.test.ts` | Key 与模型冷请求 KV 查询次数、缓存状态 |
+| `access-resolver.test.ts` | Key 与模型冷请求 Blob 查询次数、缓存状态 |
 | `provider-balance-cache.test.ts` | 强制刷新、五分钟缓存、失效竞态和概览回读 |
 | `deepseek-balance.test.ts` | 官方 host、金额精度、鉴权和错误清理 |
 | `key-quota.test.ts` | 密钥到期、RPM 窗口、日 / 周 / 月 / 年预算边界、台账缓存与成本计算 |
-| `log-policy.test.ts` | 日志总开关、级别策略、KV 写入组合、TTFT 与上下文写入矩阵 |
+| `log-policy.test.ts` | 日志总开关、级别策略、Blob 写入组合、TTFT 与上下文写入矩阵 |
 | `runtime-settings.test.ts` | 请求体默认值、16-64 MiB 校验、isolate 缓存及声明/流式大小边界 |
 | `fallback-policy.test.ts` | HTTP / Provider 错误分类 |
 | `model-discovery.test.ts` | OpenAI / Gemini / Anthropic 模型列表、分页和 ID 规范化 |
@@ -103,7 +103,7 @@ npm test
 npm run typecheck
 ```
 
-单元测试不得依赖真实 Provider、生产 KV 命名空间或任何云账号。数据层用例通过
+单元测试不得依赖真实 Provider、生产 Blob 存储或任何云账号。数据层用例通过
 `test/helpers/fake-kv.ts` 提供的内存 `FakeKV` 替身注入，并可直接断言读、写、删除和
 `list` 调用次数。
 
@@ -138,8 +138,8 @@ npm run test:e2e
 E2E_BASE_URL=https://your-preview.edgeone.app npm run test:e2e
 ```
 
-E2E 会创建、修改和删除渠道、模型与 Gateway Key。不要指向包含需要保留数据的 KV 命名空间；
-开发时推荐为测试单独绑定一个 KV 命名空间或使用独立的预览部署。
+E2E 会创建、修改和删除渠道、模型与 Gateway Key。不要指向包含需要保留数据的 Blob 存储；
+开发时推荐为测试单独绑定一个 Blob 存储或使用独立的预览部署。
 
 ## 4. UI 旅程
 
@@ -153,7 +153,7 @@ E2E 会创建、修改和删除渠道、模型与 Gateway Key。不要指向包�
    Admin API 验证相同供应商 + Provider Key 再次创建返回 `409 resource_in_use` 且不会重复导入；
 5. 通过模态表单创建统一模型和渠道实例，并验证同一模型重复绑定相同渠道返回 409；
 6. 创建带到期时间和年度请求 / Token 预算的 Gateway Key，验证周期表单、明文只展示一次，并拒绝
-   创建已过期密钥；单元测试覆盖日 / 周 / 月 / 年 UTC 边界、周期范围汇总与缓存窗口内单次 KV 汇总；
+   创建已过期密钥；单元测试覆盖日 / 周 / 月 / 年 UTC 边界、周期范围汇总与缓存窗口内单次 Blob 汇总；
 7. 调用 `/v1/models` 和 Chat 接口，验证认证、错误和 timing Header；
 8. 无 Gateway Key 返回 401；
 9. Dashboard 显示渠道、首个已创建模型和 Provider Balance；创建服务端标记的 1 小时临时
@@ -181,12 +181,12 @@ E2E 会创建、修改和删除渠道、模型与 Gateway Key。不要指向包�
 5. 从库存导入模型、重复导入幂等、库存缺失和超过 100 个模型的批量限制；
 6. Gateway HTTP 验证模型白名单、停用 Key、未知模型、协议不可用及渠道停用后的模型不可用。
 
-该套件只使用部署实例自身的 KV 命名空间和不会实际访问的 Provider 地址，适合常规 CI。它不替代下述可控上游与
+该套件只使用部署实例自身的 Blob 存储和不会实际访问的 Provider 地址，适合常规 CI。它不替代下述可控上游与
 真实 Provider 测试。
 
 ## 6. Management API 与 Skill
 
-`e2e/management-api.spec.ts` 使用真实边缘函数 HTTP 和部署实例的 KV，覆盖 Skill 中声明的只读查询与
+`e2e/management-api.spec.ts` 使用真实边缘函数 HTTP 和部署实例的 Blob 存储，覆盖 Skill 中声明的只读查询与
 资源写操作、公开能力发现与双规范 API 文档、无凭据拒绝、`read` / `write` 权限、渠道与模型实例创建、Gateway Key
 一次性明文、余额/用量/日志查询，以及
 Management Key 的到期、停用和删除。测试显式断言 Provider Key、hash 和 ciphertext 不会
@@ -222,7 +222,7 @@ Skill 的结构、manifest 和托管文件由 Management API E2E 校验。某个
 ## 7. 可控上游集成
 
 `e2e/controlled-upstream.spec.ts` 会由 Playwright 进程在随机 loopback 端口启动本地假 Provider，
-不读取或发送真实 Provider Key。请求仍经过正在运行的边缘函数、KV 路由和真实 HTTP fetch，当前覆盖：
+不读取或发送真实 Provider Key。请求仍经过正在运行的边缘函数、Blob 路由和真实 HTTP fetch，当前覆盖：
 
 1. 上游 `503`、`429` 和连接断开后按优先级切换到备用渠道；
 2. 上游 `401` 属于不可重试错误，不错误切换渠道；
@@ -310,7 +310,7 @@ git diff --check
   Dashboard 构建，且不向终端输出 `MASTER_KEY` 明文；
 - `npm run test:deploy-config` 确认 `.env.example` 只含带默认值的初始管理员密码、`edgeone.json`
   的安装/构建/输出配置正确且不含 Secret、仓库不再保留 `wrangler.jsonc` 或任何 Cloudflare 依赖；
-- 单元测试覆盖 `seedDefaults` 的幂等性：全新 KV 命名空间得到 6 条设置和 30 条价格基线，重复执行
+- 单元测试覆盖 `seedDefaults` 的幂等性：全新 Blob 存储得到 6 条设置和 30 条价格基线，重复执行
   不产生额外写入，且不覆盖管理员已修改的值；
 - Dashboard 生产资源可加载；
 - 日志、trace 和失败报告不含 Key、Prompt 或 Response；
@@ -321,7 +321,7 @@ git diff --check
 - 1KB、100KB、1MB 非流式响应的 CPU 基线；
 - 长 SSE 和慢客户端压力测试；
 - 1、2、3 候选 Fallback 的 P95/P99；
-- KV 读放大、写放大与 `list` 分页成本基线；
+- Blob 读放大、写放大与 `list` 分页成本基线；
 - 接近项目 CPU 配额时的持续负载。
 
 这些结果建立后应更新 [部署指南容量规划](DEPLOY.md#7-容量规划) 中的建议

@@ -326,7 +326,7 @@ async function handleLogin(
 
     let user = await getAdminByUsername(env.DB, username);
 
-    // First login creates the single KV-backed administrator from the one-time deploy secret.
+    // First login creates the single Blob-backed administrator from the one-time deploy secret.
     if (!user && !(await hasAdminUser(env.DB))) {
       const initialUsername = env.INITIAL_ADMIN_USERNAME ?? 'admin';
       const initialPassword = env.INITIAL_ADMIN_PASSWORD ?? env.ADMIN_TOKEN ?? '';

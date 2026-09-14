@@ -92,7 +92,7 @@ export async function handleModelsCollection(
       const id = generateId();
       let instanceId: string | null = null;
       try {
-        // KV has no transaction primitive, so keep the short write sequence
+        // Blob storage has no transaction primitive, so keep the short write sequence
         // explicit and compensate on failure.
         await createModelCard(env.DB, { id, unified_model_id: unifiedModelId, display_name: body.display_name });
         await createIdentifier(env.DB, { identifier: unifiedModelId, identifier_type: 'unified', model_card_id: id, channel_model_id: null });

@@ -188,7 +188,7 @@ async function modelHash(models: DiscoveredProviderModel[]): Promise<string> {
 
 /** Persist a previously completed preflight result after channel creation. */
 export async function persistDiscoveredProviderModels(
-  db: KVNamespace,
+  db: BlobStore,
   channelId: string,
   models: DiscoveredProviderModel[],
 ): Promise<void> {

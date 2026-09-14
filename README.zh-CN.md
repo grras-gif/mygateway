@@ -33,7 +33,7 @@
 MyGateway 边缘函数 ── 鉴权与限额 ── 路由与 Fallback ── AI 供应商
     │
     ├── SolidJS 管理控制台（静态资源）
-    └── KV：配置、用量聚合、可选请求日志
+    └── Blob：配置、用量聚合、可选请求日志
 ```
 
 ## 功能模块
@@ -55,7 +55,7 @@ MyGateway 边缘函数 ── 鉴权与限额 ── 路由与 Fallback ── A
 
 在 EdgeOne Makers 中从本仓库创建项目：构建流程使用 `npm install` 安装依赖、`npm run build:dashboard` 构建控制台，并以 `dashboard/dist` 作为静态资源目录；`functions/[[default]].ts` 处理 `/health`、`/v1/*`、`/admin/api/*` 和 `/management/v1/*`，其余路径回落到控制台。完整构建配置见 [`edgeone.json`](edgeone.json)。
 
-随后在项目中绑定名为 `DB` 的 KV 命名空间，并在 **项目 → 环境变量** 中配置 `MASTER_KEY` 与 `INITIAL_ADMIN_PASSWORD`。`MASTER_KEY` 由平台生成或由你提供；存入 Provider 凭据后请勿修改或轮换。
+随后在项目中绑定名为 `DB` 的 Blob 存储，并在 **项目 → 环境变量** 中配置 `MASTER_KEY` 与 `INITIAL_ADMIN_PASSWORD`。`MASTER_KEY` 由平台生成或由你提供；存入 Provider 凭据后请勿修改或轮换。
 
 首次登录凭据：
 
@@ -64,7 +64,7 @@ MyGateway 边缘函数 ── 鉴权与限额 ── 路由与 Fallback ── A
 密码：mygateway123
 ```
 
-首次登录后必须修改。基础设置和模型价格会在首次访问后端接口时自动写入 KV，无需执行 migration。
+首次登录后必须修改。基础设置和模型价格会在首次访问后端接口时自动写入 Blob 存储，无需执行 migration。
 
 升级、回滚、排障和额度规划见[部署指南](docs/DEPLOY.md)。
 
@@ -80,7 +80,7 @@ cp .env.example .env
 npm run dev
 ```
 
-`npm run dev` 会在 <http://localhost:5173> 启动控制台开发服务器。网关后端运行在边缘函数运行时中，要端到端验证 `/v1/*`、`/admin/api/*` 和 `/management/v1/*`，最直接的方式是为你的 EdgeOne Makers 项目创建预览部署。绑定为 `DB` 的 KV 命名空间会在首次访问后端接口时自动写入基础数据。
+`npm run dev` 会在 <http://localhost:5173> 启动控制台开发服务器。网关后端运行在边缘函数运行时中，要端到端验证 `/v1/*`、`/admin/api/*` 和 `/management/v1/*`，最直接的方式是为你的 EdgeOne Makers 项目创建预览部署。绑定为 `DB` 的 Blob 存储会在首次访问后端接口时自动写入基础数据。
 
 手工开发流程和测试命令见[贡献指南](docs/CONTRIBUTING.zh-CN.md)。提交改动前运行：
 
@@ -110,7 +110,7 @@ MyGateway 提供官方 Skill，可以直接通过 Codex、Claude Code、Pi 等�
 ## 当前边界
 
 - Fallback 只能发生在响应内容开始发送前；流式输出开始后不能切换供应商。
-- RPM 和熔断状态是 isolate 内尽力控制；日 / 周 / 月 / 年请求和 Token 预算以 KV 每日台账为权威数据。
+- RPM 和熔断状态是 isolate 内尽力控制；日 / 周 / 月 / 年请求和 Token 预算以 Blob 每日台账为权威数据。
 - Token 和费用依赖供应商上报，预估费用不等同于供应商账单。
 - 费用聚合目前没有币种维度，同一部署应统一使用一种记账币种。
 - 暂不支持 Embeddings、Images、Audio、Realtime、Batch、Files、多用户和 RBAC。

@@ -301,7 +301,7 @@ Custom usage ranges use Unix-second `start` and `end`; granularity is `hour` or 
   returned by MyGateway.
 - Never send the Management Key to another host, put it in a URL or MyGateway resource, or place it in Skill
   source. Persist it only as described in **Connect and keep access**.
-- Do not bypass the Management API through KV, project environment variables, Dashboard DOM, or `/admin/api/*`.
+- Do not bypass the Management API through Blob storage, project environment variables, Dashboard DOM, or `/admin/api/*`.
 - `401 invalid_api_key`: obtain a valid, active Management Key.
 - `403 insufficient_permission`: a `write` key is required.
 - `409 resource_in_use`: inspect duplicates or dependencies before retrying.

@@ -1,4 +1,4 @@
-/** Provider-model inventory and discovery state (KV-backed). */
+/** Provider-model inventory and discovery state (Blob-backed). */
 
 import {
   discoveryKey,
@@ -52,7 +52,7 @@ export interface ChannelModelSummary {
 }
 
 /** One pass over channels + inventory; never queries per card repeatedly. */
-export async function listChannelModelSummaries(db: KVNamespace): Promise<ChannelModelSummary[]> {
+export async function listChannelModelSummaries(db: BlobStore): Promise<ChannelModelSummary[]> {
   const [channels, providerModels, discoveryStates] = await Promise.all([
     listChannels(db),
     kvListJson<ProviderModelRow>(db, KEY_PREFIX.providerModel),
@@ -84,7 +84,7 @@ export async function listChannelModelSummaries(db: KVNamespace): Promise<Channe
   });
 }
 
-export async function listProviderModels(db: KVNamespace, channelId: string): Promise<ProviderModelRow[]> {
+export async function listProviderModels(db: BlobStore, channelId: string): Promise<ProviderModelRow[]> {
   const models = await kvListJson<ProviderModelRow>(db, providerModelPrefix(channelId));
   return models.sort((a, b) => {
     const availabilityRank = (row: ProviderModelRow) => (row.availability === 'available' ? 0 : 1);
@@ -94,18 +94,18 @@ export async function listProviderModels(db: KVNamespace, channelId: string): Pr
 }
 
 export async function getProviderModel(
-  db: KVNamespace,
+  db: BlobStore,
   channelId: string,
   providerModelId: string,
 ): Promise<ProviderModelRow | null> {
   return kvGetJson<ProviderModelRow>(db, providerModelKey(channelId, providerModelId));
 }
 
-export async function getDiscoveryState(db: KVNamespace, channelId: string): Promise<DiscoveryStateRow | null> {
+export async function getDiscoveryState(db: BlobStore, channelId: string): Promise<DiscoveryStateRow | null> {
   return kvGetJson<DiscoveryStateRow>(db, discoveryKey(channelId));
 }
 
-export async function saveDiscoveryError(db: KVNamespace, channelId: string, message: string): Promise<void> {
+export async function saveDiscoveryError(db: BlobStore, channelId: string, message: string): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const existing = await getDiscoveryState(db, channelId);
   const state: DiscoveryStateRow = {
@@ -121,7 +121,7 @@ export async function saveDiscoveryError(db: KVNamespace, channelId: string, mes
 }
 
 export async function syncDiscoveredProviderModels(
-  db: KVNamespace,
+  db: BlobStore,
   channelId: string,
   models: DiscoveredProviderModel[],
   resultHash: string,
@@ -167,7 +167,7 @@ export async function syncDiscoveredProviderModels(
 }
 
 export async function addManualProviderModel(
-  db: KVNamespace,
+  db: BlobStore,
   channelId: string,
   providerModelId: string,
   displayName: string,
@@ -188,12 +188,12 @@ export async function addManualProviderModel(
   await kvPutJson(db, providerModelKey(channelId, providerModelId), row);
 }
 
-export async function deleteProviderModel(db: KVNamespace, channelId: string, providerModelId: string): Promise<void> {
+export async function deleteProviderModel(db: BlobStore, channelId: string, providerModelId: string): Promise<void> {
   await kvDelete(db, providerModelKey(channelId, providerModelId));
 }
 
 export async function markProviderModelImported(
-  db: KVNamespace,
+  db: BlobStore,
   channelId: string,
   providerModelId: string,
   modelCardId: string,
