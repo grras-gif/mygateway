@@ -1,4 +1,5 @@
 import type { Env } from '../env.ts';
+import { jsonResponse } from '../http/json-response.ts';
 import { listChannels } from '../db/channels.ts';
 import { listChannelModels, listModelCards } from '../db/models.ts';
 import { listGatewayKeys, toPublicKey } from '../db/keys.ts';
@@ -100,7 +101,7 @@ export async function handleManagementOverview(
   else if (readyModels.length === 0) setupState = 'needs_model';
   else if (activeKeys.length === 0) setupState = 'needs_gateway_key';
 
-  return Response.json({
+  return jsonResponse({
     system: { version: env.APP_VERSION ?? '0.1.0', status: 'ok' },
     authorization: { permission },
     setup_state: setupState,

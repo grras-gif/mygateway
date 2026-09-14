@@ -28,8 +28,9 @@ EdgeOne Makers 读取仓库根目录的 `edgeone.json`：
 4. 仓库内的 `functions/**` 自动注册为边缘函数；`functions/[[default]].ts` 是 catch-all 入口
 5. 其余环境变量（`MASTER_KEY`、`INITIAL_ADMIN_PASSWORD`）在控制台的项目环境变量中配置，不进入仓库
 
-项目需要绑定一个 Blob 存储，并把它暴露为环境绑定 `DB`。MyGateway 的所有持久化
-配置、用量聚合和可选请求日志都保存在该存储内。
+项目通过官方 SDK `@edgeone/pages-blob` 以命名空间方式访问 Blob 存储（命名空间首次调用
+自动创建），无需在控制台绑定环境变量。MyGateway 的所有持久化配置、用量聚合和可选请求日志
+都保存在该命名空间内。
 
 ### 2.2 关键设计
 
@@ -72,7 +73,7 @@ push 代码 → Git 仓库 → EdgeOne Makers 构建
 | 安装命令 | `npm install` |
 | 构建命令 | `npm run build:dashboard` |
 | 输出目录 | `dashboard/dist` |
-| 环境绑定 | Blob 存储 → `DB` |
+| 存储 | 通过官方 SDK `@edgeone/pages-blob` 命名空间访问（首次调用自动创建），无需环境绑定 |
 | 环境变量 | `MASTER_KEY`、`INITIAL_ADMIN_PASSWORD` |
 
 > 这些值以仓库根目录的 `edgeone.json` 为权威来源；控制台中的同名字段应与其保持一致，
@@ -103,10 +104,10 @@ EdgeOne Makers 支持回滚到历史部署版本，静态资源与边缘函数�
 
 1. **代码来源选错**：把项目名当成仓库名 → 连到不存在的仓库，构建永不触发。**仓库名必须与 Git 上真实一致**。
 2. **构建命令错误**：只跑 `npm run build:dashboard` 才能产出 `dashboard/dist`；不要改成依赖 Cloudflare/Wrangler 的旧命令。
-3. **Blob 未绑定**：未把 Blob 存储绑定为 `DB` 时，所有后端接口都会因缺少数据绑定而失败。
+3. **Blob 访问失败**：`@edgeone/pages-blob` 未能在运行时初始化时，所有后端接口都会因缺少数据存储而失败；确认已部署到 EdgeOne Makers 运行时。
 4. **重复生成 MASTER_KEY**：项目环境变量中的 `MASTER_KEY` 一旦写入就不应再改；不要手工删除或覆盖生产值。
 5. **把 Secret 提交进仓库**：`MASTER_KEY`、`INITIAL_ADMIN_PASSWORD` 只能存在于项目环境变量和本地 `.env`；`.env` 已在 `.gitignore` 中忽略。
-6. **误以为需要 migration**：Blob 存储无 schema，无需执行任何 SQL；若控制台看不到基础设置/价格，检查 Blob 绑定与 seed 日志事件。
+6. **误以为需要 migration**：Blob 存储无 schema，无需执行任何 SQL；若控制台看不到基础设置/价格，检查 Blob 命名空间访问与 seed 日志事件。
 
 ## 6. 诊断命令
 
@@ -125,7 +126,7 @@ npm run build:dashboard
 curl -X POST https://your-project.edgeone.app/admin/api/system/cleanup
 ```
 
-部署后至少确认：项目构建成功、管理控制台可打开、Blob 绑定生效，并对健康页或一个已配置的
+部署后至少确认：项目构建成功、管理控制台可打开、Blob 命名空间可访问，并对健康页或一个已配置的
 模型完成 smoke test。不要在日志或工单中粘贴 `MASTER_KEY`、Gateway Key、Provider Key、
 Prompt 或完整响应。
 

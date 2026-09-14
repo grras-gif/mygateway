@@ -22,7 +22,7 @@ EdgeOne Makers reads `edgeone.json` from the repository root:
 4. Every file under `functions/**` is registered as an edge function; `functions/[[default]].ts` is the catch-all entry
 5. Remaining runtime values (`MASTER_KEY`, `INITIAL_ADMIN_PASSWORD`) live in project environment variables, not in the repository
 
-Bind one Blob storage to the project and expose it as the `DB` environment binding. All persistent configuration, usage aggregates, and optional request logs live in that store.
+Blob storage is reached through the official `@edgeone/pages-blob` SDK as a namespace (created automatically on first use), so no console environment binding is required. All persistent configuration, usage aggregates, and optional request logs live in that namespace.
 
 Important behavior:
 
@@ -55,7 +55,7 @@ Recommended settings:
 | Install command | `npm install` |
 | Build command | `npm run build:dashboard` |
 | Output directory | `dashboard/dist` |
-| Environment binding | Blob storage → `DB` |
+| Storage | Accessed through the official `@edgeone/pages-blob` namespace (created automatically on first use); no environment binding required |
 | Environment variables | `MASTER_KEY`, `INITIAL_ADMIN_PASSWORD` |
 
 `edgeone.json` in the repository root is the authoritative source for these values. Keep the console fields aligned with it so the static bundle and the edge functions never drift apart.
@@ -79,10 +79,10 @@ EdgeOne Makers can roll back to a previous deployment, reverting static assets a
 
 1. **Wrong repository:** the project name is not the Git repository name. Select the real Git repository or fork.
 2. **Wrong build command:** only `npm run build:dashboard` produces `dashboard/dist`. Do not reintroduce Cloudflare/Wrangler-era commands.
-3. **Blob not bound:** without Blob storage bound as `DB`, every backend route fails because the data binding is missing.
+3. **Blob access failure:** if `@edgeone/pages-blob` cannot initialise at runtime, every backend route fails because the data store is unavailable. Confirm the project runs on the EdgeOne Makers runtime.
 4. **Replaced master key:** never delete or overwrite the production `MASTER_KEY`; existing encrypted provider credentials depend on it.
 5. **Secrets committed:** `MASTER_KEY` and `INITIAL_ADMIN_PASSWORD` belong in project environment variables and a local `.env`; `.env` is already ignored by `.gitignore`.
-6. **Expecting migrations:** Blob storage has no schema and no SQL step. If the console shows no baseline settings or prices, check the Blob binding and the seed log event.
+6. **Expecting migrations:** Blob storage has no schema and no SQL step. If the console shows no baseline settings or prices, check Blob namespace access and the seed log event.
 
 ## 6. Diagnostic commands
 
@@ -101,7 +101,7 @@ npm run build:dashboard
 curl -X POST https://your-project.edgeone.app/admin/api/system/cleanup
 ```
 
-After deployment, verify that the project build succeeded, the console loads, the Blob binding is active, and `/health` or one configured model responds. Never paste `MASTER_KEY`, Gateway Keys, Provider Keys, prompts, or full responses into logs or support tickets.
+After deployment, verify that the project build succeeded, the console loads, the Blob namespace is reachable, and `/health` or one configured model responds. Never paste `MASTER_KEY`, Gateway Keys, Provider Keys, prompts, or full responses into logs or support tickets.
 
 ## 7. Quota planning
 

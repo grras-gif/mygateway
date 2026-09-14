@@ -13,6 +13,7 @@
 import { Env } from '../src/env.ts';
 import { handleRequest } from '../src/index.ts';
 import { ensureBootstrapData } from '../src/db/bootstrap.ts';
+import { getBlobStore } from '../src/storage/blob-store.ts';
 
 /** Subset of the EdgeOne Makers context used by this entry. */
 interface EdgeOneContext {
@@ -37,7 +38,12 @@ function toExecutionContext(context: EdgeOneContext): ExecutionContext {
 }
 
 export async function onRequest(context: EdgeOneContext): Promise<Response> {
-  const { request, env } = context;
+  const { request } = context;
+
+  // The runtime no longer injects a storage binding into `context.env`; wire the
+  // BlobStore adapter (official @edgeone/pages-blob SDK) into the `DB` slot the
+  // business router expects.
+  const env: Env = { ...context.env, DB: getBlobStore() };
 
   // Idempotent baseline seed (settings + model prices). Best-effort: a failure
   // only records `kv_seed_failed` and never affects the returned response.

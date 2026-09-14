@@ -3,7 +3,7 @@
 [English](CONTRIBUTING.md) · [简体中文](CONTRIBUTING.zh-CN.md)
 
 Thanks for your interest in MyGateway. The project is small by design: it runs
-on EdgeOne Makers, prefers one Blob storage binding + isolate memory over shared state, and
+on EdgeOne Makers, prefers one Blob storage namespace + isolate memory over shared state, and
 prioritizes "simple to run and understand" over enterprise features.
 
 ## Project principles

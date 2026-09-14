@@ -11,10 +11,11 @@ import {
   PERMANENT_MANAGEMENT_KEY_EXPIRY,
 } from '../db/management-keys.ts';
 import { gatewayErrorResponse } from '../http/errors.ts';
+import { jsonResponse } from '../http/json-response.ts';
 import { generateId, generateManagementKeyValue, nowSeconds, sha256Hex } from '../shared/ids.ts';
 
 function json(data: unknown, status = 200): Response {
-  return Response.json(data, { status });
+  return jsonResponse(data, { status });
 }
 
 function parsePermission(value: unknown): ManagementPermission {

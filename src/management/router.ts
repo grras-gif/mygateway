@@ -4,6 +4,7 @@ import { apiReference } from '@scalar/hono-api-reference';
 import { authenticateManagementKey } from '../auth/management-key.ts';
 import { recordManagementAudit } from '../db/management-keys.ts';
 import { gatewayErrorResponse } from '../http/errors.ts';
+import { jsonResponse } from '../http/json-response.ts';
 import { generateRequestId } from '../http/request-id.ts';
 import { generateId } from '../shared/ids.ts';
 import { logAuthFailed } from '../shared/log.ts';
@@ -488,10 +489,10 @@ async function routeManagementResource(
       context_response_ciphertext: _responseCiphertext,
       ...safe
     } = row;
-    return Response.json({ ...safe, context_request: null, context_response: null });
+    return jsonResponse({ ...safe, context_request: null, context_response: null });
   }
   if (path === '/system/status' && request.method === 'GET') {
-    return Response.json({ version: env.APP_VERSION ?? '0.1.0', status: 'ok' });
+    return jsonResponse({ version: env.APP_VERSION ?? '0.1.0', status: 'ok' });
   }
 
   return gatewayErrorResponse('invalid_request', 'Management API route not found', requestId);
@@ -505,10 +506,10 @@ export async function handleManagementApi(
 ): Promise<Response> {
   const requestId = generateRequestId();
   if (url.pathname === `${API_PREFIX}/capabilities` && request.method === 'GET') {
-    return Response.json(capabilityDocument(env), { headers: { 'x-gateway-request-id': requestId } });
+    return jsonResponse(capabilityDocument(env), { headers: { 'x-gateway-request-id': requestId } });
   }
   if (url.pathname === `${API_PREFIX}/openapi.json` && request.method === 'GET') {
-    return Response.json(openApiDocument(env), { headers: { 'x-gateway-request-id': requestId } });
+    return jsonResponse(openApiDocument(env), { headers: { 'x-gateway-request-id': requestId } });
   }
   if (url.pathname === `${API_PREFIX}/api-docs` && request.method === 'GET') {
     return managementDocsApp.fetch(request, env, ctx);

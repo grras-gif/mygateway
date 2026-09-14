@@ -8,6 +8,7 @@
  */
 
 import { Env, parseConfig, ConfigError } from './env.ts';
+import { jsonResponse } from './http/json-response.ts';
 import { generateRequestId } from './http/request-id.ts';
 import { gatewayErrorResponse } from './http/errors.ts';
 import { logConfigError } from './shared/log.ts';
@@ -37,7 +38,7 @@ export async function handleRequest(
 
   // --- Health check (no auth) ---
   if (path === '/health') {
-    return Response.json({
+    return jsonResponse({
       status: 'ok',
       version: env.APP_VERSION ?? '0.1.0',
     });
