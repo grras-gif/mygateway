@@ -271,6 +271,12 @@ export async function handleAdminApi(
     return handleLoggingSettings(request, env, requestId);
   }
 
+  // --- Retention cleanup (previously the daily Cron Trigger) ---
+  if (path === '/admin/api/system/cleanup' && request.method === 'POST') {
+    const { runRetentionCleanup } = await import('../maintenance/cleanup.ts');
+    return json(await runRetentionCleanup(env));
+  }
+
   // --- Analytics ---
   if (path === '/admin/api/analytics/usage' && request.method === 'GET') {
     const { handleAnalyticsUsage } = await import('./analytics.ts');
@@ -320,7 +326,7 @@ async function handleLogin(
 
     let user = await getAdminByUsername(env.DB, username);
 
-    // First login creates the single D1 administrator from the one-time deploy secret.
+    // First login creates the single KV-backed administrator from the one-time deploy secret.
     if (!user && !(await hasAdminUser(env.DB))) {
       const initialUsername = env.INITIAL_ADMIN_USERNAME ?? 'admin';
       const initialPassword = env.INITIAL_ADMIN_PASSWORD ?? env.ADMIN_TOKEN ?? '';

@@ -1,5 +1,6 @@
 import { TtlLruCache } from '../cache/ttl-lru.ts';
-import { hydrateCandidate, type CandidateQueryRow, type CandidateRow } from '../db/models.ts';
+import { resolveRoute, type CandidateRow, type ResolvedRoute } from '../db/models.ts';
+import { getGatewayKeyIdentityByHash } from '../db/keys.ts';
 import type { LimitPeriod } from '../shared/key-limits.ts';
 
 const ACTIVE_KEY_TTL_MS = 30_000;
@@ -43,6 +44,7 @@ export interface GatewayAccessMetrics {
   cacheStatus: 'hit' | 'partial' | 'miss';
   keyCache: 'hit' | 'miss';
   modelCache: 'hit' | 'miss' | 'skipped';
+  /** Number of KV lookups performed on this call (kept name for log compatibility). */
   d1Statements: number;
   d1Ms: number;
   accessMs: number;
@@ -54,116 +56,12 @@ export interface GatewayAccessResult {
   metrics: GatewayAccessMetrics;
 }
 
-interface RouteQueryRow extends Partial<CandidateQueryRow> {
-  identifier_type: 'unified' | 'alias';
-  model_card_id: string;
-  direct_channel_model_id: string | null;
-}
+function toModelResolution(modelName: string, route: ResolvedRoute | null): ModelResolution {
+  if (!route) return { status: 'not_found' };
 
-const KEY_QUERY = `
-  SELECT id, name, rpm_limit, request_limit, token_limit, limit_period, expires_at, model_allowlist
-  FROM gateway_api_keys
-  WHERE key_hash = ? AND status = 'active' AND revoked_at IS NULL
-  LIMIT 1
-`;
-
-// LEFT JOIN keeps one identifier row even when every candidate is disabled, so
-// callers can distinguish an unknown model from a temporarily unavailable one.
-const ROUTE_QUERY = `
-  SELECT
-    mi.identifier_type,
-    mi.model_card_id,
-    mi.channel_model_id AS direct_channel_model_id,
-    cm.id AS channel_model_id_pk,
-    cm.channel_model_id,
-    cm.public_model_alias,
-    cm.sort_order,
-    cm.supports_stream_usage,
-    cm.input_price_micros_per_million,
-    cm.output_price_micros_per_million,
-    cm.cache_input_price_micros_per_million,
-    c.id AS channel_id,
-    c.name AS channel_name,
-    c.provider_type,
-    c.base_url,
-    (SELECT json_group_array(json_object(
-      'protocol', cp.protocol,
-      'base_url', cp.base_url,
-      'auth_scheme', cp.auth_scheme,
-      'api_version', cp.api_version
-    )) FROM channel_protocols cp WHERE cp.channel_id = c.id) AS protocols_json,
-    c.api_key_ciphertext,
-    c.api_key_iv,
-    c.api_key_version
-  FROM model_identifiers mi
-  JOIN model_cards mc
-    ON mc.id = mi.model_card_id
-  LEFT JOIN channel_models cm
-    ON cm.model_card_id = mi.model_card_id
-   AND mc.status = 'active'
-   AND mc.deleted_at IS NULL
-   AND cm.status = 'active'
-   AND cm.deleted_at IS NULL
-   AND (mi.identifier_type = 'unified' OR cm.id = mi.channel_model_id)
-  LEFT JOIN channels c
-    ON c.id = cm.channel_id
-   AND c.status = 'active'
-   AND c.deleted_at IS NULL
-  WHERE mi.identifier = ?
-  ORDER BY cm.sort_order ASC, cm.id ASC
-`;
-
-function readKeyResult(rows: unknown[]): CachedGatewayKey {
-  const row = rows[0] as (GatewayKeyIdentity & {
-    rpm_limit: number | null;
-    request_limit: number | null;
-    token_limit: number | null;
-    limit_period: LimitPeriod | null;
-    expires_at: number | null;
-    model_allowlist: string | null;
-  }) | undefined;
-  if (!row) return { active: false };
-  return {
-    active: true,
-    identity: {
-      id: row.id,
-      name: row.name,
-      rpmLimit: row.rpm_limit ?? null,
-      requestLimit: row.request_limit ?? null,
-      tokenLimit: row.token_limit ?? null,
-      limitPeriod: row.limit_period ?? 'day',
-      expiresAt: row.expires_at ?? null,
-      modelAllowlist: parseAllowlist(row.model_allowlist),
-    },
-  };
-}
-
-function parseAllowlist(value: string | null): string[] {
-  if (!value) return [];
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed)
-      ? parsed.filter((item): item is string => typeof item === 'string' && item.length > 0)
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function readModelResult(modelName: string, rows: unknown[]): ModelResolution {
-  const routeRows = rows as RouteQueryRow[];
-  const marker = routeRows[0];
-  if (!marker) return { status: 'not_found' };
-
-  const candidateRows = routeRows.filter(
-    (row): row is RouteQueryRow & CandidateQueryRow =>
-      typeof row.channel_model_id_pk === 'string' && typeof row.channel_id === 'string',
-  );
-  const candidates = candidateRows.map((row) => hydrateCandidate(row));
-
-  if (marker.identifier_type === 'alias') {
-    const direct = candidates.find(
-      (candidate) => candidate.channel_model_id_pk === marker.direct_channel_model_id,
+  if (route.identifier_type === 'alias') {
+    const direct = route.candidates.find(
+      (candidate) => candidate.channel_model_id_pk === route.direct_channel_model_id,
     );
     if (!direct) return { status: 'unavailable' };
     return {
@@ -172,19 +70,19 @@ function readModelResult(modelName: string, rows: unknown[]): ModelResolution {
         direct: true,
         candidates: [direct],
         unifiedModelId: modelName,
-        modelCardId: marker.model_card_id,
+        modelCardId: route.model_card_id,
       },
     };
   }
 
-  if (candidates.length === 0) return { status: 'unavailable' };
+  if (route.candidates.length === 0) return { status: 'unavailable' };
   return {
     status: 'resolved',
     value: {
       direct: false,
-      candidates,
+      candidates: route.candidates,
       unifiedModelId: modelName,
-      modelCardId: marker.model_card_id,
+      modelCardId: route.model_card_id,
     },
   };
 }
@@ -202,24 +100,24 @@ function cacheModel(modelName: string, value: ModelResolution): void {
 }
 
 export async function authenticateGatewayKeyHash(
-  db: D1Database,
+  db: KVNamespace,
   keyHash: string,
 ): Promise<GatewayKeyIdentity | null> {
   const cached = keyCache.get(keyHash);
   if (cached) return cached.active ? cached.identity : null;
 
-  const result = await db.prepare(KEY_QUERY).bind(keyHash).all<GatewayKeyIdentity>();
-  const resolved = readKeyResult(result.results);
+  const identity = await getGatewayKeyIdentityByHash(db, keyHash);
+  const resolved: CachedGatewayKey = identity ? { active: true, identity } : { active: false };
   cacheKey(keyHash, resolved);
-  return resolved.active ? resolved.identity : null;
+  return identity;
 }
 
 /**
- * Resolve gateway authentication and model routing in one D1 round trip on a
- * full cache miss. Partial misses only query the missing value.
+ * Resolve gateway authentication and model routing together. Both lookups run
+ * in parallel on a full cache miss; partial misses only fetch the missing value.
  */
 export async function resolveGatewayAccess(
-  db: D1Database,
+  db: KVNamespace,
   keyHash: string,
   modelName: string,
 ): Promise<GatewayAccessResult> {
@@ -228,19 +126,19 @@ export async function resolveGatewayAccess(
   const cachedModel = modelCache.get(modelName);
 
   const metrics = (
-    d1Statements: number,
-    d1Ms: number,
+    kvLookups: number,
+    kvMs: number,
     modelCacheStatus: GatewayAccessMetrics['modelCache'] = cachedModel ? 'hit' : 'miss',
   ): GatewayAccessMetrics => {
-    const modelSatisfiedWithoutD1 = modelCacheStatus !== 'miss';
+    const modelSatisfiedWithoutKv = modelCacheStatus !== 'miss';
     return {
-      cacheStatus: cachedKey && modelSatisfiedWithoutD1
+      cacheStatus: cachedKey && modelSatisfiedWithoutKv
         ? 'hit'
-        : cachedKey || modelSatisfiedWithoutD1 ? 'partial' : 'miss',
+        : cachedKey || modelSatisfiedWithoutKv ? 'partial' : 'miss',
       keyCache: cachedKey ? 'hit' : 'miss',
       modelCache: modelCacheStatus,
-      d1Statements,
-      d1Ms: Math.round(d1Ms * 100) / 100,
+      d1Statements: kvLookups,
+      d1Ms: Math.round(kvMs * 100) / 100,
       accessMs: Math.round((performance.now() - accessStartedAt) * 100) / 100,
     };
   };
@@ -256,27 +154,18 @@ export async function resolveGatewayAccess(
     return { key: cachedKey.identity, model: cachedModel, metrics: metrics(0, 0) };
   }
 
-  const statements: D1PreparedStatement[] = [];
-  let keyResultIndex = -1;
-  let modelResultIndex = -1;
+  let lookups = 0;
+  const kvStartedAt = performance.now();
+  const [keyIdentity, route] = await Promise.all([
+    cachedKey ? Promise.resolve(null) : (lookups++, getGatewayKeyIdentityByHash(db, keyHash)),
+    cachedModel ? Promise.resolve(null) : (lookups++, resolveRoute(db, modelName)),
+  ]);
+  const kvMs = performance.now() - kvStartedAt;
 
-  if (!cachedKey) {
-    keyResultIndex = statements.length;
-    statements.push(db.prepare(KEY_QUERY).bind(keyHash));
-  }
-  if (!cachedModel) {
-    modelResultIndex = statements.length;
-    statements.push(db.prepare(ROUTE_QUERY).bind(modelName));
-  }
-
-  const d1StartedAt = performance.now();
-  const results = await db.batch(statements);
-  const d1Ms = performance.now() - d1StartedAt;
-
-  const resolvedKey = cachedKey ?? readKeyResult(results[keyResultIndex].results);
+  const resolvedKey: CachedGatewayKey = cachedKey ?? (keyIdentity ? { active: true, identity: keyIdentity } : { active: false });
   if (!cachedKey) cacheKey(keyHash, resolvedKey);
 
-  const resolvedModel = cachedModel ?? readModelResult(modelName, results[modelResultIndex].results);
+  const resolvedModel = cachedModel ?? toModelResolution(modelName, route);
   // An invalid caller may supply arbitrary model names. Return the already
   // fetched result, but do not let unauthenticated traffic churn the route cache.
   if (!cachedModel && resolvedKey.active) cacheModel(modelName, resolvedModel);
@@ -284,7 +173,7 @@ export async function resolveGatewayAccess(
   return {
     key: resolvedKey.active ? resolvedKey.identity : null,
     model: resolvedModel,
-    metrics: metrics(statements.length, d1Ms),
+    metrics: metrics(lookups, kvMs),
   };
 }
 

@@ -84,7 +84,7 @@ function remember(balance: ProviderBalance): void {
 }
 
 /**
- * Worker balance caches are isolate-local. A later cache-only overview may
+ * Edge function balance caches are isolate-local. A later cache-only overview may
  * therefore return not_queried even after this browser just refreshed another
  * isolate. Keep the last resolved browser value instead of regressing the UI.
  *

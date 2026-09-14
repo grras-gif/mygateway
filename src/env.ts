@@ -1,9 +1,12 @@
 /**
- * Worker Env bindings and runtime configuration.
+ * Edge function Env bindings and runtime configuration.
+ *
+ * `DB` is the KV namespace that replaced the previous Cloudflare D1 database.
+ * Static assets are served by the EdgeOne Makers platform through
+ * `context.next()`, so there is no assets binding.
  */
 export interface Env {
-  DB: D1Database;
-  ASSETS: Fetcher;
+  DB: KVNamespace;
 
   /** Initial admin username. Defaults to admin. */
   INITIAL_ADMIN_USERNAME?: string;
@@ -17,7 +20,7 @@ export interface Env {
   /** 32-byte random key, base64-encoded. Used for Provider Key AES-GCM. */
   MASTER_KEY: string;
 
-  /** App version injected via wrangler vars. */
+  /** App version injected via environment variables. */
   APP_VERSION?: string;
 
   /** Timezone for "today" dashboard boundary. Default: Asia/Shanghai */
@@ -36,7 +39,7 @@ export interface Env {
   USAGE_RETENTION_DAYS?: string;
 
   /**
-   * How often a key's period quota re-reads D1, in ms. Between refreshes the
+   * How often a key's period quota re-reads KV, in ms. Between refreshes the
    * isolate adds its own completed requests locally. Default: 30000
    */
   KEY_QUOTA_REFRESH_MS?: string;

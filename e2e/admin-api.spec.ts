@@ -1,7 +1,7 @@
 /**
  * Admin API and gateway edge-case regression suite.
  *
- * This suite uses only local D1 and deliberately non-routable provider URLs;
+ * This suite uses only the deployment's own KV namespace and deliberately non-routable provider URLs;
  * it never requires or sends a real Provider Key.
  */
 import { test, expect, type APIRequestContext } from '@playwright/test';

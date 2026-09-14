@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { applyServerTiming } from '../src/http/server-timing.ts';
 
 describe('gateway Server-Timing', () => {
-  test('formats cache, D1, upstream and gateway timings', () => {
+  test('formats cache, KV lookup, upstream and gateway timings', () => {
     const response = applyServerTiming(new Response('ok'), {
       access: {
         cacheStatus: 'partial',

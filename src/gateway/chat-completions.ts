@@ -232,7 +232,7 @@ async function handleProtocolCompletion(
     )), { status: 429, headers: respHeaders }));
   }
 
-  // 2d. Natural-period budget (authoritative daily rows in D1, cached per isolate)
+  // 2d. Natural-period budget (authoritative daily rows in KV, cached per isolate)
   const quota = await checkQuota(env.DB, key);
   if (!quota.allowed) {
     const isTokens = quota.reason === 'token_limit';

@@ -12,6 +12,7 @@ import {
   findActiveKeyByHash,
   updateGatewayKeyStatus,
   updateGatewayKeyLimits,
+  updateGatewayKeyName,
   revokeGatewayKey,
   deleteGatewayKey,
   cleanupExpiredTemporaryGatewayKeys,
@@ -212,9 +213,7 @@ export async function handleKeyItem(
       }
 
       if (body.name !== undefined) {
-        await env.DB.prepare('UPDATE gateway_api_keys SET name = ?, updated_at = ? WHERE id = ?')
-          .bind(body.name.trim() || 'unnamed', Math.floor(Date.now() / 1000), id)
-          .run();
+        await updateGatewayKeyName(env.DB, id, body.name.trim() || 'unnamed');
       }
       if (body.status !== undefined) {
         if (!['active', 'disabled'].includes(body.status)) {

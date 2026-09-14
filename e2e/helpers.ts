@@ -1,37 +1,38 @@
 /**
  * Shared helpers for E2E tests.
- * All tests run against a local wrangler dev server (http://localhost:8799).
+ * All tests run against a deployed MyGateway instance (default http://localhost:8799).
+ * Point E2E_BASE_URL at an EdgeOne Makers preview or production deployment to run them.
  */
 
 import { Page, expect, APIRequestContext } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Initial credentials are read from env/.dev.vars — NEVER hardcode secrets.
-export const ADMIN_USERNAME = process.env.INITIAL_ADMIN_USERNAME ?? devVar('INITIAL_ADMIN_USERNAME') ?? 'admin';
+// Initial credentials are read from env/.env — NEVER hardcode secrets.
+export const ADMIN_USERNAME = process.env.INITIAL_ADMIN_USERNAME ?? envVar('INITIAL_ADMIN_USERNAME') ?? 'admin';
 const INITIAL_ADMIN_PASSWORD = process.env.INITIAL_ADMIN_PASSWORD
-  ?? devVar('INITIAL_ADMIN_PASSWORD')
+  ?? envVar('INITIAL_ADMIN_PASSWORD')
   ?? process.env.ADMIN_TOKEN
-  ?? devVar('ADMIN_TOKEN')
+  ?? envVar('ADMIN_TOKEN')
   ?? '';
 const E2E_ADMIN_PASSWORD = 'e2e-local-admin-2026';
 let activePassword = E2E_ADMIN_PASSWORD;
 
 if (!INITIAL_ADMIN_PASSWORD) {
   throw new Error(
-    'INITIAL_ADMIN_PASSWORD (or legacy ADMIN_TOKEN) not found. Add it to .dev.vars before running E2E tests.',
+    'INITIAL_ADMIN_PASSWORD (or legacy ADMIN_TOKEN) not found. Add it to .env before running E2E tests.',
   );
 }
 
 /**
- * Read a secret from .dev.vars (local dev only). Returns undefined if missing.
+ * Read a secret from .env (local dev only). Returns undefined if missing.
  * Never hardcode provider keys in test files — read them from env instead.
  */
-export function devVar(name: string): string | undefined {
+export function envVar(name: string): string | undefined {
   const fromEnv = process.env[name];
   if (fromEnv) return fromEnv;
   try {
-    const file = readFileSync(join(process.cwd(), '.dev.vars'), 'utf8');
+    const file = readFileSync(join(process.cwd(), '.env'), 'utf8');
     const line = file.split('\n').find((l: string) => l.trim().startsWith(`${name}=`));
     if (!line) return undefined;
     return line.trim().slice(name.length + 1);
@@ -79,7 +80,7 @@ export async function loginViaApi(api: APIRequestContext): Promise<void> {
 }
 
 /**
- * Reset DB to a clean state: delete all channels (cascades instances+aliases),
+ * Reset state to a clean baseline: delete all channels (cascades instances+aliases),
  * all keys, and all model cards. Run at the start of the serial flow.
  */
 export async function resetState(api: APIRequestContext): Promise<void> {

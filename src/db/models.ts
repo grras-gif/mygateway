@@ -1,8 +1,16 @@
 /**
- * Model cards and channel model instances — database operations.
+ * Model cards and channel model instances — KV-backed operations.
  */
 
 import { parseCandidateProtocols, type ChannelProtocol } from '../gateway/protocols.ts';
+import {
+  channelModelKey,
+  KEY_PREFIX,
+  modelCardKey,
+  modelIdentifierKey,
+} from '../kv/keys.ts';
+import { kvDelete, kvGetJson, kvListJson, kvPutJson } from '../kv/store.ts';
+import { getChannelProtocols, getChannelRow } from './channels.ts';
 
 export interface ModelCardRow {
   id: string;
@@ -11,6 +19,10 @@ export interface ModelCardRow {
   status: 'active' | 'disabled';
   created_at: number;
   updated_at: number;
+}
+
+export interface StoredModelCardRow extends ModelCardRow {
+  deleted_at: number | null;
 }
 
 export interface ChannelModelRow {
@@ -34,6 +46,10 @@ export interface ChannelModelRow {
   updated_at: number;
 }
 
+export interface StoredChannelModelRow extends ChannelModelRow {
+  deleted_at: number | null;
+}
+
 export interface ModelIdentifierRow {
   identifier: string;
   identifier_type: 'unified' | 'alias';
@@ -43,212 +59,258 @@ export interface ModelIdentifierRow {
 
 // --- Model Cards ---
 
-export async function listModelCards(db: D1Database): Promise<ModelCardRow[]> {
-  const result = await db
-    .prepare('SELECT * FROM model_cards WHERE deleted_at IS NULL ORDER BY created_at DESC')
-    .all<ModelCardRow>();
-  return result.results;
+export async function listModelCards(db: KVNamespace): Promise<ModelCardRow[]> {
+  const rows = await kvListJson<StoredModelCardRow>(db, KEY_PREFIX.modelCard);
+  return rows
+    .filter((row) => row.deleted_at === null || row.deleted_at === undefined)
+    .sort((a, b) => b.created_at - a.created_at)
+    .map(({ deleted_at: _deletedAt, ...card }) => card);
 }
 
-export async function getModelCard(db: D1Database, id: string): Promise<ModelCardRow | null> {
-  return db
-    .prepare('SELECT * FROM model_cards WHERE id = ? AND deleted_at IS NULL')
-    .bind(id)
-    .first<ModelCardRow>();
+export async function getModelCard(db: KVNamespace, id: string): Promise<ModelCardRow | null> {
+  const row = await kvGetJson<StoredModelCardRow>(db, modelCardKey(id));
+  if (!row || (row.deleted_at !== null && row.deleted_at !== undefined)) return null;
+  const { deleted_at: _deletedAt, ...card } = row;
+  return card;
 }
 
 export async function createModelCard(
-  db: D1Database,
+  db: KVNamespace,
   card: { id: string; unified_model_id: string; display_name: string; status?: string },
 ): Promise<void> {
-  const status = card.status ?? 'active';
-  await db
-    .prepare(
-      `INSERT INTO model_cards (id, unified_model_id, display_name, status)
-       VALUES (?, ?, ?, ?)`,
-    )
-    .bind(card.id, card.unified_model_id, card.display_name, status)
-    .run();
+  const now = Math.floor(Date.now() / 1000);
+  const row: StoredModelCardRow = {
+    id: card.id,
+    unified_model_id: card.unified_model_id,
+    display_name: card.display_name,
+    status: (card.status ?? 'active') as 'active' | 'disabled',
+    created_at: now,
+    updated_at: now,
+    deleted_at: null,
+  };
+  await kvPutJson(db, modelCardKey(card.id), row);
 }
 
 export async function updateModelCard(
-  db: D1Database,
+  db: KVNamespace,
   id: string,
   updates: { display_name?: string; status?: string },
 ): Promise<void> {
-  const now = Math.floor(Date.now() / 1000);
-  const fields: string[] = ['updated_at = ?'];
-  const values: unknown[] = [now];
-
-  if (updates.display_name !== undefined) {
-    fields.push('display_name = ?');
-    values.push(updates.display_name);
-  }
-  if (updates.status !== undefined) {
-    fields.push('status = ?');
-    values.push(updates.status);
-  }
-
-  values.push(id);
-  await db
-    .prepare(`UPDATE model_cards SET ${fields.join(', ')} WHERE id = ? AND deleted_at IS NULL`)
-    .bind(...values)
-    .run();
+  const row = await kvGetJson<StoredModelCardRow>(db, modelCardKey(id));
+  if (!row || (row.deleted_at !== null && row.deleted_at !== undefined)) return;
+  if (updates.display_name !== undefined) row.display_name = updates.display_name;
+  if (updates.status !== undefined) row.status = updates.status as 'active' | 'disabled';
+  row.updated_at = Math.floor(Date.now() / 1000);
+  await kvPutJson(db, modelCardKey(id), row);
 }
 
-export async function softDeleteModelCard(db: D1Database, id: string): Promise<void> {
+export async function softDeleteModelCard(db: KVNamespace, id: string): Promise<void> {
+  const row = await kvGetJson<StoredModelCardRow>(db, modelCardKey(id));
+  if (!row) return;
   const now = Math.floor(Date.now() / 1000);
-  await db
-    .prepare('UPDATE model_cards SET deleted_at = ?, updated_at = ? WHERE id = ?')
-    .bind(now, now, id)
-    .run();
+  row.deleted_at = now;
+  row.updated_at = now;
+  await kvPutJson(db, modelCardKey(id), row);
+}
+
+/** Hard-delete a model card record (rollback of a partially created card). */
+export async function deleteModelCard(db: KVNamespace, id: string): Promise<void> {
+  await kvDelete(db, modelCardKey(id));
 }
 
 // --- Channel Model Instances ---
 
 export async function listChannelModels(
-  db: D1Database,
+  db: KVNamespace,
   modelCardId: string,
 ): Promise<ChannelModelRow[]> {
-  const result = await db
-    .prepare(
-      'SELECT * FROM channel_models WHERE model_card_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC',
+  const rows = await kvListJson<StoredChannelModelRow>(db, KEY_PREFIX.channelModel);
+  return rows
+    .filter(
+      (row) =>
+        row.model_card_id === modelCardId
+        && (row.deleted_at === null || row.deleted_at === undefined),
     )
-    .bind(modelCardId)
-    .all<ChannelModelRow>();
-  return result.results;
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map(({ deleted_at: _deletedAt, ...instance }) => instance);
 }
 
 export async function createChannelModel(
-  db: D1Database,
+  db: KVNamespace,
   instance: Omit<ChannelModelRow, 'created_at' | 'updated_at' | 'manual_metadata_updated_at'>,
 ): Promise<void> {
-  await db
-    .prepare(
-      `INSERT INTO channel_models (
-        id, model_card_id, channel_id, channel_model_id, public_model_alias,
-        sort_order, status, supports_stream_usage,
-        input_price_micros_per_million, output_price_micros_per_million,
-        cache_input_price_micros_per_million, currency,
-        plan_tokens_total, plan_tokens_remaining, plan_expires_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      instance.id,
-      instance.model_card_id,
-      instance.channel_id,
-      instance.channel_model_id,
-      instance.public_model_alias,
-      instance.sort_order,
-      instance.status,
-      instance.supports_stream_usage,
-      instance.input_price_micros_per_million,
-      instance.output_price_micros_per_million,
-      instance.cache_input_price_micros_per_million,
-      instance.currency,
-      instance.plan_tokens_total,
-      instance.plan_tokens_remaining,
-      instance.plan_expires_at,
-    )
-    .run();
+  const now = Math.floor(Date.now() / 1000);
+  const row: StoredChannelModelRow = {
+    ...instance,
+    created_at: now,
+    updated_at: now,
+    manual_metadata_updated_at: null,
+    deleted_at: null,
+  };
+  await kvPutJson(db, channelModelKey(instance.id), row);
 }
 
 export async function getChannelModelForCardChannel(
-  db: D1Database,
+  db: KVNamespace,
   modelCardId: string,
   channelId: string,
 ): Promise<ChannelModelRow | null> {
-  return db.prepare(
-    `SELECT * FROM channel_models
-     WHERE model_card_id = ? AND channel_id = ? AND deleted_at IS NULL LIMIT 1`,
-  ).bind(modelCardId, channelId).first<ChannelModelRow>();
+  const instances = await listChannelModels(db, modelCardId);
+  return instances.find((instance) => instance.channel_id === channelId) ?? null;
 }
 
 export async function reorderInstances(
-  db: D1Database,
+  db: KVNamespace,
   modelCardId: string,
   instanceIds: string[],
 ): Promise<void> {
-  for (let i = 0; i < instanceIds.length; i++) {
-    await db
-      .prepare('UPDATE channel_models SET sort_order = ? WHERE id = ? AND model_card_id = ?')
-      .bind(i, instanceIds[i], modelCardId)
-      .run();
+  for (let index = 0; index < instanceIds.length; index++) {
+    const row = await kvGetJson<StoredChannelModelRow>(db, channelModelKey(instanceIds[index]));
+    if (!row || row.model_card_id !== modelCardId) continue;
+    row.sort_order = index;
+    row.updated_at = Math.floor(Date.now() / 1000);
+    await kvPutJson(db, channelModelKey(instanceIds[index]), row);
+  }
+}
+
+export async function countChannelModels(db: KVNamespace, modelCardId: string): Promise<number> {
+  const instances = await listChannelModels(db, modelCardId);
+  return instances.length;
+}
+
+/** Update pricing / stream metadata on a single instance. */
+export async function updateChannelModelInstance(
+  db: KVNamespace,
+  instanceId: string,
+  updates: {
+    input_price_micros_per_million?: number | null;
+    output_price_micros_per_million?: number | null;
+    cache_input_price_micros_per_million?: number | null;
+    currency?: string;
+    supports_stream_usage?: 0 | 1;
+  },
+): Promise<void> {
+  const row = await kvGetJson<StoredChannelModelRow>(db, channelModelKey(instanceId));
+  if (!row) return;
+  if (updates.input_price_micros_per_million !== undefined) {
+    row.input_price_micros_per_million = updates.input_price_micros_per_million;
+  }
+  if (updates.output_price_micros_per_million !== undefined) {
+    row.output_price_micros_per_million = updates.output_price_micros_per_million;
+  }
+  if (updates.cache_input_price_micros_per_million !== undefined) {
+    row.cache_input_price_micros_per_million = updates.cache_input_price_micros_per_million;
+  }
+  if (updates.currency !== undefined) row.currency = updates.currency;
+  if (updates.supports_stream_usage !== undefined) {
+    row.supports_stream_usage = updates.supports_stream_usage;
+  }
+  row.updated_at = Math.floor(Date.now() / 1000);
+  await kvPutJson(db, channelModelKey(instanceId), row);
+}
+
+/** Hard-delete a single instance (rollback). */
+export async function deleteChannelModel(db: KVNamespace, instanceId: string): Promise<void> {
+  await kvDelete(db, channelModelKey(instanceId));
+}
+
+/** Hard-delete every instance of a model card (rollback). */
+export async function deleteChannelModelsByModelCard(
+  db: KVNamespace,
+  modelCardId: string,
+): Promise<void> {
+  const rows = await kvListJson<StoredChannelModelRow>(db, KEY_PREFIX.channelModel);
+  await Promise.all(
+    rows
+      .filter((row) => row.model_card_id === modelCardId)
+      .map((row) => kvDelete(db, channelModelKey(row.id))),
+  );
+}
+
+/** Soft-delete every instance of a model card (admin model delete). */
+export async function softDeleteChannelModelsByModelCard(
+  db: KVNamespace,
+  modelCardId: string,
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const rows = await kvListJson<StoredChannelModelRow>(db, KEY_PREFIX.channelModel);
+  for (const row of rows) {
+    if (row.model_card_id !== modelCardId) continue;
+    row.deleted_at = now;
+    row.updated_at = now;
+    await kvPutJson(db, channelModelKey(row.id), row);
   }
 }
 
 // --- Model Identifiers ---
 
 export async function resolveIdentifier(
-  db: D1Database,
+  db: KVNamespace,
   identifier: string,
 ): Promise<ModelIdentifierRow | null> {
-  return db
-    .prepare('SELECT identifier, identifier_type, model_card_id, channel_model_id FROM model_identifiers WHERE identifier = ?')
-    .bind(identifier)
-    .first<ModelIdentifierRow>();
+  return kvGetJson<ModelIdentifierRow>(db, modelIdentifierKey(identifier));
 }
 
 export async function createIdentifier(
-  db: D1Database,
+  db: KVNamespace,
   ident: ModelIdentifierRow,
 ): Promise<void> {
-  await db
-    .prepare(
-      'INSERT INTO model_identifiers (identifier, identifier_type, model_card_id, channel_model_id) VALUES (?, ?, ?, ?)',
-    )
-    .bind(ident.identifier, ident.identifier_type, ident.model_card_id, ident.channel_model_id)
-    .run();
+  await kvPutJson(db, modelIdentifierKey(ident.identifier), ident);
 }
 
-export async function deleteIdentifier(db: D1Database, identifier: string): Promise<void> {
-  await db.prepare('DELETE FROM model_identifiers WHERE identifier = ?').bind(identifier).run();
+export async function deleteIdentifier(db: KVNamespace, identifier: string): Promise<void> {
+  await kvDelete(db, modelIdentifierKey(identifier));
+}
+
+/** Delete every identifier that belongs to a model card. */
+export async function deleteIdentifiersByModelCard(
+  db: KVNamespace,
+  modelCardId: string,
+): Promise<void> {
+  const rows = await kvListJson<ModelIdentifierRow>(db, KEY_PREFIX.modelIdentifier);
+  await Promise.all(
+    rows
+      .filter((row) => row.model_card_id === modelCardId)
+      .map((row) => kvDelete(db, modelIdentifierKey(row.identifier))),
+  );
 }
 
 /**
- * Get all enabled candidates for a model card, joined with channel info.
+ * Full cascade used by the admin model delete: free the unified id, drop
+ * identifiers, soft-delete instances, and detach provider-model imports.
  */
-export async function getCandidatesForModel(
-  db: D1Database,
-  modelCardId: string,
-): Promise<CandidateRow[]> {
-  return db
-    .prepare(
-      `SELECT
-        cm.id AS channel_model_id_pk,
-        cm.channel_model_id,
-        cm.public_model_alias,
-        cm.sort_order,
-        cm.supports_stream_usage,
-        cm.input_price_micros_per_million,
-        cm.output_price_micros_per_million,
-        cm.cache_input_price_micros_per_million,
-        c.id AS channel_id,
-        c.name AS channel_name,
-        c.provider_type,
-        c.base_url,
-        (SELECT json_group_array(json_object(
-          'protocol', cp.protocol,
-          'base_url', cp.base_url,
-          'auth_scheme', cp.auth_scheme,
-          'api_version', cp.api_version
-        )) FROM channel_protocols cp WHERE cp.channel_id = c.id) AS protocols_json,
-        c.api_key_ciphertext,
-        c.api_key_iv,
-        c.api_key_version
-      FROM channel_models cm
-      JOIN channels c ON c.id = cm.channel_id
-      WHERE cm.model_card_id = ?
-        AND cm.status = 'active'
-        AND cm.deleted_at IS NULL
-        AND c.status = 'active'
-        AND c.deleted_at IS NULL
-      ORDER BY cm.sort_order ASC, cm.id ASC`,
-    )
-    .bind(modelCardId)
-    .all<CandidateQueryRow>()
-    .then((r) => r.results.map(hydrateCandidate));
+export async function deleteModelCardCascade(db: KVNamespace, id: string): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  await deleteIdentifiersByModelCard(db, id);
+
+  const card = await kvGetJson<StoredModelCardRow>(db, modelCardKey(id));
+  if (card) {
+    card.deleted_at = now;
+    card.updated_at = now;
+    card.unified_model_id = `deleted:${id}:${now}`;
+    await kvPutJson(db, modelCardKey(id), card);
+  }
+  await softDeleteChannelModelsByModelCard(db, id);
+
+  const providerModels = await kvListJson<{
+    channel_id: string;
+    provider_model_id: string;
+    imported_model_card_id: string | null;
+    updated_at: number;
+  }>(db, KEY_PREFIX.providerModel);
+  for (const providerModel of providerModels) {
+    if (providerModel.imported_model_card_id !== id) continue;
+    providerModel.imported_model_card_id = null;
+    providerModel.updated_at = now;
+    await kvPutJson(
+      db,
+      `${KEY_PREFIX.providerModel}${providerModel.channel_id}:${providerModel.provider_model_id}`,
+      providerModel,
+    );
+  }
 }
+
+// --- Routing ---
 
 export interface CandidateRow {
   channel_model_id_pk: string;
@@ -277,5 +339,91 @@ export function hydrateCandidate(row: CandidateQueryRow): CandidateRow {
   return {
     ...row,
     protocols: parseCandidateProtocols(row.protocols_json, row.base_url),
+  };
+}
+
+async function buildCandidate(
+  db: KVNamespace,
+  instance: ChannelModelRow,
+): Promise<CandidateRow | null> {
+  const channel = await getChannelRow(db, instance.channel_id);
+  if (!channel || (channel.deleted_at !== null && channel.deleted_at !== undefined)) return null;
+  if (channel.status !== 'active') return null;
+  const protocols = await getChannelProtocols(db, channel.id);
+  return hydrateCandidate({
+    channel_model_id_pk: instance.id,
+    channel_model_id: instance.channel_model_id,
+    public_model_alias: instance.public_model_alias,
+    sort_order: instance.sort_order,
+    supports_stream_usage: instance.supports_stream_usage,
+    input_price_micros_per_million: instance.input_price_micros_per_million,
+    output_price_micros_per_million: instance.output_price_micros_per_million,
+    cache_input_price_micros_per_million: instance.cache_input_price_micros_per_million,
+    channel_id: channel.id,
+    channel_name: channel.name,
+    provider_type: channel.provider_type,
+    base_url: channel.base_url,
+    protocols_json: JSON.stringify(protocols),
+    api_key_ciphertext: channel.api_key_ciphertext,
+    api_key_iv: channel.api_key_iv,
+    api_key_version: channel.api_key_version,
+  });
+}
+
+/**
+ * Get all enabled candidates for a model card, joined with channel info.
+ */
+export async function getCandidatesForModel(
+  db: KVNamespace,
+  modelCardId: string,
+): Promise<CandidateRow[]> {
+  const instances = (await listChannelModels(db, modelCardId))
+    .filter((instance) => instance.status === 'active')
+    .sort((a, b) => (a.sort_order - b.sort_order) || a.id.localeCompare(b.id));
+  const candidates = await Promise.all(instances.map((instance) => buildCandidate(db, instance)));
+  return candidates.filter((candidate): candidate is CandidateRow => candidate !== null);
+}
+
+export interface ResolvedRoute {
+  identifier_type: 'unified' | 'alias';
+  model_card_id: string;
+  direct_channel_model_id: string | null;
+  candidates: CandidateRow[];
+}
+
+/**
+ * Resolve a model identifier to its card and enabled candidates.
+ * Returns null when the identifier is unknown (unknown model).
+ * When the identifier exists but every candidate is unavailable, `candidates`
+ * is empty so callers can distinguish unknown from temporarily unavailable.
+ */
+export async function resolveRoute(
+  db: KVNamespace,
+  identifier: string,
+): Promise<ResolvedRoute | null> {
+  const ident = await resolveIdentifier(db, identifier);
+  if (!ident) return null;
+
+  const card = await getModelCard(db, ident.model_card_id);
+  const candidates: CandidateRow[] = [];
+  if (card && card.status === 'active') {
+    const instances = (await listChannelModels(db, ident.model_card_id))
+      .filter((instance) => instance.status === 'active')
+      .filter(
+        (instance) =>
+          ident.identifier_type === 'unified' || instance.id === ident.channel_model_id,
+      )
+      .sort((a, b) => (a.sort_order - b.sort_order) || a.id.localeCompare(b.id));
+    for (const instance of instances) {
+      const candidate = await buildCandidate(db, instance);
+      if (candidate) candidates.push(candidate);
+    }
+  }
+
+  return {
+    identifier_type: ident.identifier_type,
+    model_card_id: ident.model_card_id,
+    direct_channel_model_id: ident.channel_model_id,
+    candidates,
   };
 }

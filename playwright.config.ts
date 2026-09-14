@@ -4,7 +4,7 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 60_000,
   retries: 0,
-  workers: 1, // serial — shares one D1 state
+  workers: 1, // serial — the suite shares one KV namespace
   fullyParallel: false,
   reporter: [['list']],
   use: {

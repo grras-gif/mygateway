@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { beforeEach, describe, expect, test } from 'vitest';
 import { computeCostMicros, formatUsdMicros } from '../src/shared/cost.ts';
 import { checkQuota, checkRpm, configureKeyQuota, keyIsExpired, resetKeyQuota } from '../src/gateway/key-quota.ts';
 import type { GatewayKeyIdentity } from '../src/gateway/access-resolver.ts';
@@ -9,7 +9,9 @@ import {
   parseModelAllowlist,
   serializeModelAllowlist,
   toPublicKey,
+  type GatewayKeyRow,
 } from '../src/db/keys.ts';
+import { asKV, FakeKV } from './helpers/fake-kv.ts';
 
 const key = (overrides: Partial<GatewayKeyIdentity> = {}): GatewayKeyIdentity => ({
   id: 'key-1',
@@ -20,6 +22,25 @@ const key = (overrides: Partial<GatewayKeyIdentity> = {}): GatewayKeyIdentity =>
   limitPeriod: 'day',
   expiresAt: null,
   modelAllowlist: [],
+  ...overrides,
+});
+
+const keyRow = (overrides: Partial<GatewayKeyRow> = {}): GatewayKeyRow => ({
+  id: 'key-1',
+  name: 'default',
+  key_prefix: 'gw_test',
+  key_hash: 'hash-1',
+  status: 'active',
+  rpm_limit: null,
+  request_limit: null,
+  token_limit: null,
+  limit_period: 'day',
+  expires_at: null,
+  model_allowlist: null,
+  created_at: 1,
+  updated_at: 1,
+  revoked_at: null,
+  is_temporary: 0,
   ...overrides,
 });
 
@@ -78,41 +99,28 @@ describe('key quota', () => {
     expect(quotaWindow('year', now)).toEqual({ period: 'year', startDate: '2026-01-01', endDate: '2027-01-01' });
   });
 
-  test('period quota reads one indexed D1 range and blocks at configured limits', async () => {
-    const usage: Record<string, unknown> = {};
-    let statement = '';
-    let bindings: unknown[] = [];
-    const db = {
-      prepare: (sql: string) => {
-        statement = sql;
-        return {
-          bind: (...params: unknown[]) => {
-            bindings = params;
-            return {
-              first: async () => usage[`${params[0]}:${params[1]}:${params[2]}`] ?? null,
-              all: async () => ({ results: [] }),
-              run: async () => ({ meta: { changes: 1 } }),
-            };
-          },
-        };
-      },
-    } as unknown as D1Database;
+  test('period quota reads the KV usage window and blocks at configured limits', async () => {
+    const fake = new FakeKV();
+    const db = asKV(fake);
 
+    const allowed = await checkQuota(db, key({
+      id: 'limited', requestLimit: 1, limitPeriod: 'week',
+    }), now);
+    expect(allowed).toEqual({ allowed: true });
+    expect(fake.lookups).toBe(1);
+
+    fake.seed('key_usage:limited:2026-08-03', {
+      key_id: 'limited', date: '2026-08-03', requests: 1, input_tokens: 0, output_tokens: 0, cost_micros: 0,
+    });
+    resetKeyQuota(); // simulate the refresh window elapsing → re-read KV
     const blocked = await checkQuota(db, key({
       id: 'limited', requestLimit: 1, limitPeriod: 'week',
     }), now);
-    expect(blocked).toEqual({ allowed: true });
-    expect(statement).toContain('WHERE key_id = ? AND date >= ? AND date < ?');
-    expect(bindings).toEqual(['limited', '2026-08-03', '2026-08-10']);
+    expect(blocked).toEqual({ allowed: false, reason: 'request_limit' });
 
-    usage['limited:2026-08-03:2026-08-10'] = { requests: 1, input_tokens: 0, output_tokens: 0, cost_micros: 0 };
-    resetKeyQuota(); // simulate the refresh window elapsing → re-read D1
-    const blocked2 = await checkQuota(db, key({
-      id: 'limited', requestLimit: 1, limitPeriod: 'week',
-    }), now);
-    expect(blocked2).toEqual({ allowed: false, reason: 'request_limit' });
-
-    usage['tokens:2026-01-01:2027-01-01'] = { requests: 0, input_tokens: 1_000, output_tokens: 500, cost_micros: 0 };
+    fake.seed('key_usage:tokens:2026-01-01', {
+      key_id: 'tokens', date: '2026-01-01', requests: 0, input_tokens: 1_000, output_tokens: 500, cost_micros: 0,
+    });
     resetKeyQuota();
     const tokenBlocked = await checkQuota(db, key({
       id: 'tokens', tokenLimit: 1_000, limitPeriod: 'year',
@@ -120,68 +128,38 @@ describe('key quota', () => {
     expect(tokenBlocked).toEqual({ allowed: false, reason: 'token_limit' });
   });
 
-  test('ledger reuses the D1 snapshot and counts local bumps between refreshes', async () => {
-    let reads = 0;
-    const usage: Record<string, unknown> = {};
-    const db = {
-      prepare: (sql: string) => ({
-        bind: (...params: unknown[]) => ({
-          first: async () => {
-            reads++;
-            return usage[`${params[0]}:${params[1]}`] ?? null;
-          },
-          all: async () => ({ results: [] }),
-          run: async () => ({ meta: { changes: 1 } }),
-        }),
-      }),
-    } as unknown as D1Database;
+  test('ledger reuses the KV snapshot and counts local bumps between refreshes', async () => {
+    const fake = new FakeKV();
+    const db = asKV(fake);
     const { bumpKeyQuotaLedger } = await import('../src/gateway/key-quota.ts');
 
     const identity = key({ id: 'busy', requestLimit: 3 });
     expect(await checkQuota(db, identity, now)).toEqual({ allowed: true });
-    expect(reads).toBe(1);
+    const lookupsAfterFirst = fake.lookups;
 
-    // Completed requests bump the local ledger — no extra D1 reads.
+    // Completed requests bump the local ledger — no extra KV reads.
     bumpKeyQuotaLedger('busy', { requests: 1, inputTokens: 0, outputTokens: 0, costMicros: 0 });
     bumpKeyQuotaLedger('busy', { requests: 1, inputTokens: 0, outputTokens: 0, costMicros: 0 });
     expect(await checkQuota(db, identity, now)).toEqual({ allowed: true }); // 2 < 3
     bumpKeyQuotaLedger('busy', { requests: 1, inputTokens: 0, outputTokens: 0, costMicros: 0 });
     expect(await checkQuota(db, identity, now)).toEqual({ allowed: false, reason: 'request_limit' }); // 3 >= 3
-    expect(reads).toBe(1); // still the single D1 read
+    expect(fake.lookups).toBe(lookupsAfterFirst); // still the single KV read
   });
 
-  test('coalesces concurrent cold-cache checks into one D1 read', async () => {
-    let reads = 0;
-    const db = {
-      prepare: () => ({
-        bind: () => ({
-          first: async () => {
-            reads++;
-            await Promise.resolve();
-            return { requests: 0, input_tokens: 0, output_tokens: 0, cost_micros: 0 };
-          },
-        }),
-      }),
-    } as unknown as D1Database;
+  test('coalesces concurrent cold-cache checks into one KV read', async () => {
+    const fake = new FakeKV();
+    const db = asKV(fake);
     const identity = key({ id: 'concurrent', tokenLimit: 1_000, limitPeriod: 'month' });
     await Promise.all([checkQuota(db, identity, now), checkQuota(db, identity, now)]);
-    expect(reads).toBe(1);
+    expect(fake.lookups).toBe(1);
   });
 
-  test('period quota skips the D1 read when no limits are set', async () => {
-    let reads = 0;
-    const db = {
-      prepare: () => ({
-        bind: () => ({
-          first: async () => { reads++; return null; },
-          all: async () => ({ results: [] }),
-          run: async () => ({ meta: { changes: 1 } }),
-        }),
-      }),
-    } as unknown as D1Database;
+  test('period quota skips the KV read when no limits are set', async () => {
+    const fake = new FakeKV();
+    const db = asKV(fake);
     const decision = await checkQuota(db, key(), now);
     expect(decision).toEqual({ allowed: true });
-    expect(reads).toBe(0);
+    expect(fake.lookups).toBe(0);
   });
 });
 
@@ -216,31 +194,35 @@ test('an explicitly cleared migrated budget does not fall back to stale legacy v
 });
 
 describe('temporary gateway key persistence', () => {
-  test('list query hides expired temporary keys without deleting regular keys', async () => {
-    let statement = '';
-    const db = {
-      prepare: (sql: string) => {
-        statement = sql;
-        return { all: async () => ({ results: [] }) };
-      },
-    } as unknown as D1Database;
+  test('listing hides expired temporary keys without dropping regular keys', async () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const fake = new FakeKV()
+      .seed('gateway_key:regular', keyRow({ id: 'regular', is_temporary: 0 }))
+      .seed('gateway_key:temp-live', keyRow({
+        id: 'temp-live', is_temporary: 1, expires_at: nowSeconds + 3_600,
+      }))
+      .seed('gateway_key:temp-expired', keyRow({
+        id: 'temp-expired', is_temporary: 1, expires_at: nowSeconds - 1,
+      }));
 
-    await listGatewayKeys(db);
-    expect(statement).toContain('is_temporary = 0');
-    expect(statement).toContain('expires_at > unixepoch()');
+    const keys = await listGatewayKeys(asKV(fake));
+    expect(keys.map((row) => row.id).sort()).toEqual(['regular', 'temp-live']);
   });
 
-  test('lazy cleanup only deletes expired server-marked temporary keys', async () => {
-    let statement = '';
-    const db = {
-      prepare: (sql: string) => {
-        statement = sql;
-        return { run: async () => ({ meta: { changes: 2 } }) };
-      },
-    } as unknown as D1Database;
+  test('lazy cleanup deletes only expired server-marked temporary keys', async () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const fake = new FakeKV()
+      .seed('gateway_key:regular', keyRow({ id: 'regular', is_temporary: 0 }))
+      .seed('gateway_key:temp-live', keyRow({
+        id: 'temp-live', is_temporary: 1, expires_at: nowSeconds + 3_600,
+      }))
+      .seed('gateway_key:temp-expired', keyRow({
+        id: 'temp-expired', is_temporary: 1, expires_at: nowSeconds - 1,
+      }));
 
-    expect(await cleanupExpiredTemporaryGatewayKeys(db)).toBe(2);
-    expect(statement).toContain('is_temporary = 1');
-    expect(statement).toContain('expires_at <= unixepoch()');
+    expect(await cleanupExpiredTemporaryGatewayKeys(asKV(fake))).toBe(1);
+    expect(fake.store.has('gateway_key:temp-expired')).toBe(false);
+    expect(fake.store.has('gateway_key:temp-live')).toBe(true);
+    expect(fake.store.has('gateway_key:regular')).toBe(true);
   });
 });

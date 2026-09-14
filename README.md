@@ -8,11 +8,11 @@ Connect multiple AI providers behind one API, one key system, and one management
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Leon00x/mygateway)
+[![Deploy to EdgeOne Makers](https://img.shields.io/badge/Deploy-EdgeOne%20Makers-0052D9)](https://console.cloud.tencent.com/edgeone/makers)
 
 [![CI](https://github.com/Leon00x/mygateway/actions/workflows/ci.yml/badge.svg)](https://github.com/Leon00x/mygateway/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+[![EdgeOne Makers](https://img.shields.io/badge/EdgeOne-Makers-0052D9?logo=tencentcloud&logoColor=white)](https://edgeone.ai/products/makers)
 
 </div>
 
@@ -20,7 +20,7 @@ Connect multiple AI providers behind one API, one key system, and one management
 
 ## Why MyGateway
 
-1. **One-click deployment to Cloudflare** — no server to maintain. The default architecture is designed for the Cloudflare Free Tier, which can cover most everyday usage for individuals and small teams.
+1. **One-click deployment to EdgeOne Makers** — no server to maintain. Static console assets and the edge function share one EdgeOne Makers project, and the default architecture fits the platform's free quota for everyday use by individuals and small teams.
 2. **Multiple providers behind one model** — place equivalent models from different providers behind one public model name. Order channels by price or your own preference, and automatically fail over when the preferred channel is unavailable.
 3. **Manage it with your preferred AI agent** — the official Skill lets agents such as Codex, Claude Code, and Pi inspect your gateway, add providers and models, manage client keys, and check balances, usage, and logs.
 
@@ -30,10 +30,10 @@ MyGateway also supports OpenAI Chat, OpenAI Responses, and Anthropic Messages AP
 Apps / SDKs
     │  Chat Completions · Responses · Messages
     ▼
-MyGateway Worker ── authentication & limits ── routing & fallback ── AI providers
+MyGateway Edge Function ── authentication & limits ── routing & fallback ── AI providers
     │
-    ├── SolidJS management console
-    └── D1: configuration, usage aggregates, optional request logs
+    ├── SolidJS management console (static assets)
+    └── KV: configuration, usage aggregates, optional request logs
 ```
 
 ## Features
@@ -53,7 +53,9 @@ The complete implementation status and roadmap are maintained in the [PRD](docs/
 
 ## Deploy
 
-Click **Deploy to Cloudflare**. Cloudflare creates a repository in your GitHub or GitLab account, provisions the prefilled `mygateway` Worker and D1 database, applies migrations, and generates the internal encryption secret. You do not need to fork first. The only application setting shown during deployment is the initial administrator password; it defaults to `mygateway123` and can be changed before deployment.
+Create an EdgeOne Makers project from this repository. The project installs dependencies with `npm install`, builds the console with `npm run build:dashboard`, and serves `dashboard/dist` as static assets; `functions/[[default]].ts` handles `/health`, `/v1/*`, `/admin/api/*`, and `/management/v1/*`. Every other path falls through to the console. See [`edgeone.json`](edgeone.json) for the exact build settings.
+
+Then bind a KV namespace named `DB` and add the runtime environment variables (`MASTER_KEY`, `INITIAL_ADMIN_PASSWORD`) in **Project → Environment Variables**. `MASTER_KEY` is generated once by the platform or supplied by you; it must not be changed or rotated after provider credentials are stored.
 
 Initial administrator credentials:
 
@@ -62,9 +64,9 @@ Username: admin
 Password: mygateway123
 ```
 
-You must change them after the first sign-in. MyGateway creates `MASTER_KEY` as an internal Cloudflare Secret; it needs no routine management and must not be deleted or rotated after provider credentials are stored.
+You must change them after the first sign-in. Baseline settings and model prices are seeded into KV on the first backend request, so no migration step is required.
 
-See the [deployment guide](docs/DEPLOY.en.md) for upgrades, rollback, troubleshooting, and Free Tier planning.
+See the [deployment guide](docs/DEPLOY.en.md) for upgrades, rollback, troubleshooting, and quota planning.
 
 ## Run locally
 
@@ -73,10 +75,12 @@ Requires Node.js 22 or later.
 ```bash
 git clone https://github.com/Leon00x/mygateway.git
 cd mygateway
-npm run local
+npm install
+cp .env.example .env
+npm run dev
 ```
 
-The command installs locked dependencies when needed, creates local-only secrets, builds the console, applies D1 migrations, and starts MyGateway at <http://localhost:8787>. Local data persists in Wrangler's local state. Sign in with `admin` / `mygateway123`, then change the credentials.
+`npm run dev` starts the console dev server at <http://localhost:5173>. The gateway backend runs on the edge function runtime, so the fastest way to exercise `/v1/*`, `/admin/api/*`, and `/management/v1/*` end to end is a preview deployment of your EdgeOne Makers project. The KV namespace bound as `DB` is seeded automatically on the first backend request.
 
 For the manual development loop and test commands, see the [contributing guide](docs/CONTRIBUTING.md). Before submitting a change, run:
 
@@ -89,7 +93,7 @@ npm run build
 ## API example
 
 ```bash
-curl https://your-gateway.workers.dev/v1/chat/completions \
+curl https://your-project.edgeone.app/v1/chat/completions \
   -H "Authorization: Bearer YOUR_GATEWAY_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"your-model","messages":[{"role":"user","content":"Hello"}]}'
@@ -106,7 +110,7 @@ Create an agent credential under **System → Management Keys & Skill**, then gi
 ## Current boundaries
 
 - Fallback is only possible before response bytes are committed; an active stream cannot move to another provider.
-- RPM limits and circuit state are best-effort per isolate. Daily request and Token budgets use D1 as their authority.
+- RPM limits and circuit state are best-effort per isolate. Daily request and Token budgets use KV as their authority.
 - Token and cost metrics depend on provider-reported usage. Estimated cost is not a provider invoice.
 - Aggregated cost currently has no currency dimension; use one accounting currency per deployment.
 - Embeddings, Images, Audio, Realtime, Batch, Files, multi-user accounts, and RBAC are not currently supported.
@@ -120,7 +124,7 @@ Start with the [documentation index](docs/README.md).
 | [Product requirements](docs/PRD.md) | Product scope, implementation status, boundaries, and roadmap |
 | [Architecture](docs/ARCHITECTURE.md) | Control plane, data plane, storage, caching, and consistency |
 | [Detailed design](docs/DESIGN.md) | Protocol conversion, providers, model discovery, analytics, and pricing |
-| [Deployment](docs/DEPLOY.en.md) | Deployment, upgrades, rollback, troubleshooting, and Free Tier planning |
+| [Deployment](docs/DEPLOY.en.md) | Deployment, upgrades, rollback, troubleshooting, and quota planning |
 | [Testing](docs/TESTING.md) | Unit, UI, controlled-upstream, and real-provider verification |
 | [Contributing](docs/CONTRIBUTING.md) | Development workflow and contribution requirements |
 | [Security](docs/SECURITY.md) | Vulnerability reporting and deployment responsibilities |

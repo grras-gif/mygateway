@@ -115,7 +115,7 @@ function base64url(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function base64urlDecode(s: string): Uint8Array {
+function base64urlDecode(s: string): Uint8Array<ArrayBuffer> {
   let base64 = s.replace(/-/g, '+').replace(/_/g, '/');
   while (base64.length % 4) base64 += '=';
   return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));

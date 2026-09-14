@@ -1,6 +1,17 @@
-/** Channel and native protocol endpoint database operations. */
+/** Channel and native protocol endpoint operations (KV-backed). */
 
 import type { ChannelProtocol, GatewayProtocol, ProtocolAuthScheme } from '../gateway/protocols.ts';
+import {
+  channelKey,
+  channelModelKey,
+  channelProtocolKey,
+  channelProtocolPrefix,
+  KEY_PREFIX,
+  modelCardKey,
+  modelIdentifierKey,
+  providerModelKey,
+} from '../kv/keys.ts';
+import { kvDelete, kvGetJson, kvListJson, kvListKeys, kvPutJson } from '../kv/store.ts';
 
 export interface ChannelRow {
   id: string;
@@ -16,6 +27,11 @@ export interface ChannelRow {
   short_code: string | null;
   created_at: number;
   updated_at: number;
+}
+
+/** Stored channel with its soft-delete marker. */
+export interface StoredChannelRow extends ChannelRow {
+  deleted_at: number | null;
 }
 
 /** Channel as returned to admin API (no key material). */
@@ -55,69 +71,63 @@ export function toPublicChannel(row: ChannelWithProtocols): ChannelPublic {
   };
 }
 
-async function getProtocolMap(db: D1Database, channelIds: string[]): Promise<Map<string, ChannelProtocol[]>> {
-  if (channelIds.length === 0) return new Map();
-  const placeholders = channelIds.map(() => '?').join(', ');
-  const result = await db
-    .prepare(`SELECT channel_id, protocol, base_url, auth_scheme, api_version
-      FROM channel_protocols WHERE channel_id IN (${placeholders}) ORDER BY protocol ASC`)
-    .bind(...channelIds)
-    .all<ChannelProtocol & { channel_id: string }>();
-  const map = new Map<string, ChannelProtocol[]>();
-  for (const row of result.results) {
-    const entries = map.get(row.channel_id) ?? [];
-    entries.push({
+export async function getChannelProtocols(
+  db: KVNamespace,
+  channelId: string,
+): Promise<ChannelProtocol[]> {
+  const rows = await kvListJson<ChannelProtocol & { channel_id: string }>(
+    db,
+    channelProtocolPrefix(channelId),
+  );
+  return rows
+    .map((row) => ({
       protocol: row.protocol,
       base_url: row.base_url,
       auth_scheme: row.auth_scheme,
       api_version: row.api_version,
-    });
-    map.set(row.channel_id, entries);
-  }
-  return map;
+    }))
+    .sort((a, b) => a.protocol.localeCompare(b.protocol));
 }
 
-export async function listChannels(db: D1Database): Promise<ChannelWithProtocols[]> {
-  const result = await db
-    .prepare('SELECT * FROM channels WHERE deleted_at IS NULL ORDER BY created_at DESC')
-    .all<ChannelRow>();
-  const protocolMap = await getProtocolMap(db, result.results.map((row) => row.id));
-  return result.results.map((row) => ({ ...row, protocols: protocolMap.get(row.id) ?? [] }));
+/** Raw channel row (including soft-deleted channels). */
+export async function getChannelRow(
+  db: KVNamespace,
+  id: string,
+): Promise<StoredChannelRow | null> {
+  return kvGetJson<StoredChannelRow>(db, channelKey(id));
 }
 
-export async function getChannel(db: D1Database, id: string): Promise<ChannelWithProtocols | null> {
-  const row = await db
-    .prepare('SELECT * FROM channels WHERE id = ? AND deleted_at IS NULL')
-    .bind(id)
-    .first<ChannelRow>();
-  if (!row) return null;
-  const protocolMap = await getProtocolMap(db, [id]);
-  return { ...row, protocols: protocolMap.get(id) ?? [] };
+export async function listChannels(db: KVNamespace): Promise<ChannelWithProtocols[]> {
+  const rows = await kvListJson<StoredChannelRow>(db, KEY_PREFIX.channel);
+  const active = rows
+    .filter((row) => row.deleted_at === null || row.deleted_at === undefined)
+    .sort((a, b) => b.created_at - a.created_at);
+  return Promise.all(
+    active.map(async (row) => ({
+      ...stripDeleted(row),
+      protocols: await getChannelProtocols(db, row.id),
+    })),
+  );
+}
+
+function stripDeleted(row: StoredChannelRow): ChannelRow {
+  const { deleted_at: _deletedAt, ...channel } = row;
+  return channel;
+}
+
+export async function getChannel(db: KVNamespace, id: string): Promise<ChannelWithProtocols | null> {
+  const row = await getChannelRow(db, id);
+  if (!row || (row.deleted_at !== null && row.deleted_at !== undefined)) return null;
+  return { ...stripDeleted(row), protocols: await getChannelProtocols(db, id) };
 }
 
 export async function createChannel(
-  db: D1Database,
+  db: KVNamespace,
   channel: Omit<ChannelRow, 'created_at' | 'updated_at'>,
 ): Promise<void> {
-  await db
-    .prepare(
-      `INSERT INTO channels (id, name, provider_type, base_url, api_key_ciphertext, api_key_iv, api_key_version, status, notes, preset_id, short_code)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      channel.id,
-      channel.name,
-      channel.provider_type,
-      channel.base_url,
-      channel.api_key_ciphertext,
-      channel.api_key_iv,
-      channel.api_key_version,
-      channel.status,
-      channel.notes,
-      channel.preset_id,
-      channel.short_code,
-    )
-    .run();
+  const now = Math.floor(Date.now() / 1000);
+  const row: StoredChannelRow = { ...channel, created_at: now, updated_at: now, deleted_at: null };
+  await kvPutJson(db, channelKey(channel.id), row);
 }
 
 export interface ChannelProtocolInput {
@@ -128,22 +138,25 @@ export interface ChannelProtocolInput {
 }
 
 export async function replaceChannelProtocols(
-  db: D1Database,
+  db: KVNamespace,
   channelId: string,
   protocols: ChannelProtocolInput[],
 ): Promise<void> {
-  await db.prepare('DELETE FROM channel_protocols WHERE channel_id = ?').bind(channelId).run();
+  const existing = await kvListKeys(db, channelProtocolPrefix(channelId));
+  await Promise.all(existing.map((key) => db.delete(key)));
   for (const entry of protocols) {
-    await db.prepare(`INSERT INTO channel_protocols
-      (channel_id, protocol, base_url, auth_scheme, api_version)
-      VALUES (?, ?, ?, ?, ?)`)
-      .bind(channelId, entry.protocol, entry.base_url, entry.auth_scheme, entry.api_version ?? null)
-      .run();
+    await kvPutJson(db, channelProtocolKey(channelId, entry.protocol), {
+      channel_id: channelId,
+      protocol: entry.protocol,
+      base_url: entry.base_url,
+      auth_scheme: entry.auth_scheme,
+      api_version: entry.api_version ?? null,
+    });
   }
 }
 
 export async function updateChannel(
-  db: D1Database,
+  db: KVNamespace,
   id: string,
   updates: {
     name?: string;
@@ -156,66 +169,46 @@ export async function updateChannel(
     short_code?: string | null;
   },
 ): Promise<void> {
-  const now = Math.floor(Date.now() / 1000);
-  const fields: string[] = ['updated_at = ?'];
-  const values: unknown[] = [now];
-
-  if (updates.name !== undefined) {
-    fields.push('name = ?');
-    values.push(updates.name);
-  }
-  if (updates.base_url !== undefined) {
-    fields.push('base_url = ?');
-    values.push(updates.base_url);
-  }
-  if (updates.api_key_ciphertext !== undefined) {
-    fields.push('api_key_ciphertext = ?');
-    values.push(updates.api_key_ciphertext);
-  }
-  if (updates.api_key_iv !== undefined) {
-    fields.push('api_key_iv = ?');
-    values.push(updates.api_key_iv);
-  }
-  if (updates.status !== undefined) {
-    fields.push('status = ?');
-    values.push(updates.status);
-  }
-  if (updates.notes !== undefined) {
-    fields.push('notes = ?');
-    values.push(updates.notes);
-  }
-  if (updates.preset_id !== undefined) {
-    fields.push('preset_id = ?');
-    values.push(updates.preset_id);
-  }
-  if (updates.short_code !== undefined) {
-    fields.push('short_code = ?');
-    values.push(updates.short_code);
-  }
-
-  values.push(id);
-  await db.prepare(`UPDATE channels SET ${fields.join(', ')} WHERE id = ? AND deleted_at IS NULL`).bind(...values).run();
+  const row = await getChannelRow(db, id);
+  if (!row) return;
+  if (updates.name !== undefined) row.name = updates.name;
+  if (updates.base_url !== undefined) row.base_url = updates.base_url;
+  if (updates.api_key_ciphertext !== undefined) row.api_key_ciphertext = updates.api_key_ciphertext;
+  if (updates.api_key_iv !== undefined) row.api_key_iv = updates.api_key_iv;
+  if (updates.status !== undefined) row.status = updates.status as 'active' | 'disabled';
+  if (updates.notes !== undefined) row.notes = updates.notes;
+  if (updates.preset_id !== undefined) row.preset_id = updates.preset_id;
+  if (updates.short_code !== undefined) row.short_code = updates.short_code;
+  row.updated_at = Math.floor(Date.now() / 1000);
+  await kvPutJson(db, channelKey(id), row);
 }
 
-export async function softDeleteChannel(db: D1Database, id: string): Promise<void> {
+export async function softDeleteChannel(db: KVNamespace, id: string): Promise<void> {
+  const row = await getChannelRow(db, id);
+  if (!row) return;
   const now = Math.floor(Date.now() / 1000);
-  await db
-    .prepare('UPDATE channels SET deleted_at = ?, updated_at = ? WHERE id = ?')
-    .bind(now, now, id)
-    .run();
+  row.deleted_at = now;
+  row.updated_at = now;
+  await kvPutJson(db, channelKey(id), row);
 }
 
 /**
  * Check if a channel is referenced by any active model instance.
  */
-export async function isChannelReferenced(db: D1Database, channelId: string): Promise<boolean> {
-  const result = await db
-    .prepare(
-      'SELECT COUNT(*) as cnt FROM channel_models WHERE channel_id = ? AND deleted_at IS NULL',
-    )
-    .bind(channelId)
-    .first<{ cnt: number }>();
-  return (result?.cnt ?? 0) > 0;
+export async function isChannelReferenced(db: KVNamespace, channelId: string): Promise<boolean> {
+  const instances = await kvListJson<ChannelModelLike>(db, KEY_PREFIX.channelModel);
+  return instances.some(
+    (instance) =>
+      instance.channel_id === channelId
+      && (instance.deleted_at === null || instance.deleted_at === undefined),
+  );
+}
+
+interface ChannelModelLike {
+  id: string;
+  model_card_id: string;
+  channel_id: string;
+  deleted_at?: number | null;
 }
 
 export interface ChannelDeleteModelImpact {
@@ -230,74 +223,121 @@ export interface ChannelDeleteModelImpact {
 
 /** Read-only impact used before the destructive confirmation. */
 export async function getChannelDeleteImpact(
-  db: D1Database,
+  db: KVNamespace,
   channelId: string,
 ): Promise<ChannelDeleteModelImpact[]> {
-  const result = await db.prepare(
-    `SELECT mc.id AS model_card_id, mc.unified_model_id, mc.display_name,
-       (SELECT COUNT(*) FROM channel_models target
-        WHERE target.model_card_id = mc.id AND target.channel_id = ? AND target.deleted_at IS NULL) AS channel_instances,
-       (SELECT COUNT(*) FROM channel_models all_instances
-        WHERE all_instances.model_card_id = mc.id AND all_instances.deleted_at IS NULL) AS total_instances
-     FROM model_cards mc
-     WHERE mc.deleted_at IS NULL AND EXISTS (
-       SELECT 1 FROM channel_models target
-       WHERE target.model_card_id = mc.id AND target.channel_id = ? AND target.deleted_at IS NULL
-     )
-     ORDER BY mc.unified_model_id ASC`,
-  ).bind(channelId, channelId).all<Omit<ChannelDeleteModelImpact, 'remaining_instances' | 'will_delete_model'>>();
-  return result.results.map((row) => {
-    const channelInstances = Number(row.channel_instances);
-    const totalInstances = Number(row.total_instances);
+  const [instances, cards] = await Promise.all([
+    kvListJson<ChannelModelLike>(db, KEY_PREFIX.channelModel),
+    kvListJson<{ id: string; unified_model_id: string; display_name: string; deleted_at?: number | null }>(
+      db,
+      KEY_PREFIX.modelCard,
+    ),
+  ]);
+  const liveInstances = instances.filter(
+    (instance) => instance.deleted_at === null || instance.deleted_at === undefined,
+  );
+  const liveCards = cards.filter(
+    (card) => card.deleted_at === null || card.deleted_at === undefined,
+  );
+
+  const impacts: ChannelDeleteModelImpact[] = [];
+  for (const card of liveCards) {
+    const totalInstances = liveInstances.filter((i) => i.model_card_id === card.id).length;
+    const channelInstances = liveInstances.filter(
+      (i) => i.model_card_id === card.id && i.channel_id === channelId,
+    ).length;
+    if (channelInstances === 0) continue;
     const remainingInstances = Math.max(0, totalInstances - channelInstances);
-    return {
-      ...row,
+    impacts.push({
+      model_card_id: card.id,
+      unified_model_id: card.unified_model_id,
+      display_name: card.display_name,
       channel_instances: channelInstances,
       total_instances: totalInstances,
       remaining_instances: remainingInstances,
       will_delete_model: remainingInstances === 0,
-    };
-  });
+    });
+  }
+  return impacts.sort((a, b) => a.unified_model_id.localeCompare(b.unified_model_id));
 }
 
 /** Soft-delete model cards that became unroutable after a channel was removed. */
 export async function softDeleteOrphanModelCards(
-  db: D1Database,
+  db: KVNamespace,
   modelCardIds: string[],
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
+  const instances = await kvListJson<ChannelModelLike>(db, KEY_PREFIX.channelModel);
   for (const modelCardId of modelCardIds) {
-    const remaining = await db.prepare(
-      'SELECT COUNT(*) AS count FROM channel_models WHERE model_card_id = ? AND deleted_at IS NULL',
-    ).bind(modelCardId).first<{ count: number }>();
-    if ((remaining?.count ?? 0) > 0) continue;
-    await db.prepare('DELETE FROM model_identifiers WHERE model_card_id = ?').bind(modelCardId).run();
-    await db.prepare(
-      `UPDATE model_cards SET deleted_at = ?, updated_at = ?, unified_model_id = ?
-       WHERE id = ? AND deleted_at IS NULL`,
-    ).bind(now, now, `deleted:${modelCardId}:${now}`, modelCardId).run();
-    await db.prepare(
-      'UPDATE channel_provider_models SET imported_model_card_id = NULL, updated_at = ? WHERE imported_model_card_id = ?',
-    ).bind(now, modelCardId).run();
+    const remaining = instances.filter(
+      (instance) =>
+        instance.model_card_id === modelCardId
+        && (instance.deleted_at === null || instance.deleted_at === undefined),
+    ).length;
+    if (remaining > 0) continue;
+
+    const identifiers = await kvListJson<{ identifier: string; model_card_id: string }>(
+      db,
+      KEY_PREFIX.modelIdentifier,
+    );
+    await Promise.all(
+      identifiers
+        .filter((identifier) => identifier.model_card_id === modelCardId)
+        .map((identifier) => kvDelete(db, modelIdentifierKey(identifier.identifier))),
+    );
+
+    const card = await kvGetJson<{
+      id: string;
+      unified_model_id: string;
+      display_name: string;
+      status: 'active' | 'disabled';
+      created_at: number;
+      updated_at: number;
+      deleted_at?: number | null;
+    }>(db, modelCardKey(modelCardId));
+    if (card) {
+      card.deleted_at = now;
+      card.updated_at = now;
+      card.unified_model_id = `deleted:${modelCardId}:${now}`;
+      await kvPutJson(db, modelCardKey(modelCardId), card);
+    }
+
+    const providerModels = await kvListJson<{
+      channel_id: string;
+      provider_model_id: string;
+      imported_model_card_id: string | null;
+      updated_at: number;
+    }>(db, KEY_PREFIX.providerModel);
+    for (const providerModel of providerModels) {
+      if (providerModel.imported_model_card_id !== modelCardId) continue;
+      providerModel.imported_model_card_id = null;
+      providerModel.updated_at = now;
+      await kvPutJson(
+        db,
+        providerModelKey(providerModel.channel_id, providerModel.provider_model_id),
+        providerModel,
+      );
+    }
   }
 }
 
 /**
  * Hard-delete all model instances referencing a channel (cascade on channel delete).
- * Instances are useless once their channel is gone, so we remove them entirely
- * (and their identifiers) rather than soft-deleting — this also frees aliases.
  */
-export async function softDeleteInstancesByChannel(db: D1Database, channelId: string): Promise<void> {
-  // Remove identifiers pointing at instances of this channel
-  await db
-    .prepare(`DELETE FROM model_identifiers WHERE channel_model_id IN (
-      SELECT id FROM channel_models WHERE channel_id = ?
-    )`)
-    .bind(channelId)
-    .run();
-  // Hard-delete the instances
-  await db
-    .prepare('DELETE FROM channel_models WHERE channel_id = ?')
-    .bind(channelId)
-    .run();
+export async function softDeleteInstancesByChannel(db: KVNamespace, channelId: string): Promise<void> {
+  const instances = await kvListJson<ChannelModelLike>(db, KEY_PREFIX.channelModel);
+  const doomed = instances.filter((instance) => instance.channel_id === channelId);
+  if (doomed.length === 0) return;
+  const doomedIds = new Set(doomed.map((instance) => instance.id));
+
+  const identifiers = await kvListJson<{ identifier: string; channel_model_id: string | null }>(
+    db,
+    KEY_PREFIX.modelIdentifier,
+  );
+  await Promise.all(
+    identifiers
+      .filter((identifier) => identifier.channel_model_id && doomedIds.has(identifier.channel_model_id))
+      .map((identifier) => kvDelete(db, modelIdentifierKey(identifier.identifier))),
+  );
+  await Promise.all(doomed.map((instance) => kvDelete(db, channelModelKey(instance.id))));
 }

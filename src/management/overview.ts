@@ -1,28 +1,10 @@
 import type { Env } from '../env.ts';
 import { listChannels } from '../db/channels.ts';
+import { listChannelModels, listModelCards } from '../db/models.ts';
 import { listGatewayKeys, toPublicKey } from '../db/keys.ts';
 import { cachedProviderBalances } from '../admin/provider-balances.ts';
 
 type SetupState = 'needs_channel' | 'needs_model' | 'needs_gateway_key' | 'ready';
-
-interface OverviewModelRow {
-  id: string;
-  unified_model_id: string;
-  display_name: string;
-  model_status: 'active' | 'disabled';
-  instance_id: string | null;
-  channel_id: string | null;
-  channel_name: string | null;
-  channel_model_id: string | null;
-  public_model_alias: string | null;
-  sort_order: number | null;
-  instance_status: 'active' | 'disabled' | null;
-  channel_status: 'active' | 'disabled' | null;
-  input_price_micros_per_million: number | null;
-  output_price_micros_per_million: number | null;
-  cache_input_price_micros_per_million: number | null;
-  currency: string | null;
-}
 
 function recommendedAction(state: SetupState): string {
   if (state === 'needs_channel') return 'add_channel';
@@ -36,26 +18,12 @@ export async function handleManagementOverview(
   env: Env,
   permission: 'read' | 'write',
 ): Promise<Response> {
-  const [channels, modelResult, keyRows] = await Promise.all([
+  const [channels, cards, keyRows] = await Promise.all([
     listChannels(env.DB),
-    env.DB.prepare(`
-      SELECT
-        mc.id, mc.unified_model_id, mc.display_name, mc.status AS model_status,
-        cm.id AS instance_id, cm.channel_id, c.name AS channel_name,
-        cm.channel_model_id, cm.public_model_alias, cm.sort_order,
-        cm.status AS instance_status, c.status AS channel_status,
-        cm.input_price_micros_per_million, cm.output_price_micros_per_million,
-        cm.cache_input_price_micros_per_million, cm.currency
-      FROM model_cards mc
-      LEFT JOIN channel_models cm
-        ON cm.model_card_id = mc.id AND cm.deleted_at IS NULL
-      LEFT JOIN channels c
-        ON c.id = cm.channel_id AND c.deleted_at IS NULL
-      WHERE mc.deleted_at IS NULL
-      ORDER BY mc.created_at DESC, cm.sort_order ASC
-    `).all<OverviewModelRow>(),
+    listModelCards(env.DB),
     listGatewayKeys(env.DB),
   ]);
+  const channelById = new Map(channels.map((channel) => [channel.id, channel]));
 
   const modelMap = new Map<string, {
     id: string;
@@ -76,33 +44,45 @@ export async function handleManagementOverview(
     }>;
   }>();
 
-  for (const row of modelResult.results) {
-    let model = modelMap.get(row.id);
-    if (!model) {
-      model = {
-        id: row.id,
-        unified_model_id: row.unified_model_id,
-        display_name: row.display_name,
-        status: row.model_status,
-        instances: [],
-      };
-      modelMap.set(row.id, model);
-    }
-    if (row.instance_id && row.channel_id && row.channel_name && row.channel_model_id
-      && row.public_model_alias && row.instance_status && row.channel_status) {
+  // In-memory equivalent of the previous model_cards ⟕ channel_models ⟕ channels join.
+  for (const card of cards) {
+    const model = {
+      id: card.id,
+      unified_model_id: card.unified_model_id,
+      display_name: card.display_name,
+      status: card.status,
+      instances: [] as Array<{
+        id: string;
+        channel_id: string;
+        channel_name: string;
+        provider_model_id: string;
+        public_model_alias: string;
+        sort_order: number;
+        status: 'active' | 'disabled';
+        channel_status: 'active' | 'disabled';
+        pricing_configured: boolean;
+        currency: string | null;
+      }>,
+    };
+    modelMap.set(card.id, model);
+
+    const instances = await listChannelModels(env.DB, card.id);
+    for (const instance of instances) {
+      const channel = channelById.get(instance.channel_id);
+      if (!channel) continue; // channel missing/deleted — dropped by the old LEFT JOIN filter
       model.instances.push({
-        id: row.instance_id,
-        channel_id: row.channel_id,
-        channel_name: row.channel_name,
-        provider_model_id: row.channel_model_id,
-        public_model_alias: row.public_model_alias,
-        sort_order: row.sort_order ?? model.instances.length,
-        status: row.instance_status,
-        channel_status: row.channel_status,
-        pricing_configured: row.input_price_micros_per_million !== null
-          || row.output_price_micros_per_million !== null
-          || row.cache_input_price_micros_per_million !== null,
-        currency: row.currency,
+        id: instance.id,
+        channel_id: instance.channel_id,
+        channel_name: channel.name,
+        provider_model_id: instance.channel_model_id,
+        public_model_alias: instance.public_model_alias,
+        sort_order: instance.sort_order ?? model.instances.length,
+        status: instance.status,
+        channel_status: channel.status,
+        pricing_configured: instance.input_price_micros_per_million !== null
+          || instance.output_price_micros_per_million !== null
+          || instance.cache_input_price_micros_per_million !== null,
+        currency: instance.currency,
       });
     }
   }

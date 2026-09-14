@@ -1,5 +1,7 @@
 import { generateId } from '../shared/ids.ts';
 import { PasswordDigest } from '../auth/password.ts';
+import { adminUserKey, adminUserByNameKey, KEY_PREFIX } from '../kv/keys.ts';
+import { kvDelete, kvGetJson, kvListKeys, kvPutJson } from '../kv/store.ts';
 
 export interface AdminUserRow {
   id: string;
@@ -13,51 +15,73 @@ export interface AdminUserRow {
   updated_at: number;
   last_login_at: number | null;
 }
-export async function getAdminByUsername(db: D1Database, username: string): Promise<AdminUserRow | null> {
-  return db.prepare('SELECT * FROM admin_users WHERE username = ? LIMIT 1').bind(username).first<AdminUserRow>();
+
+export async function getAdminByUsername(db: KVNamespace, username: string): Promise<AdminUserRow | null> {
+  const id = await db.get(adminUserByNameKey(username));
+  if (!id) return null;
+  return getAdminById(db, id);
 }
 
-export async function getAdminById(db: D1Database, id: string): Promise<AdminUserRow | null> {
-  return db.prepare('SELECT * FROM admin_users WHERE id = ? LIMIT 1').bind(id).first<AdminUserRow>();
+export async function getAdminById(db: KVNamespace, id: string): Promise<AdminUserRow | null> {
+  return kvGetJson<AdminUserRow>(db, adminUserKey(id));
 }
 
-export async function hasAdminUser(db: D1Database): Promise<boolean> {
-  const result = await db.prepare('SELECT COUNT(*) AS count FROM admin_users').first<{ count: number }>();
-  return (result?.count ?? 0) > 0;
+export async function hasAdminUser(db: KVNamespace): Promise<boolean> {
+  const keys = await kvListKeys(db, KEY_PREFIX.adminUser);
+  return keys.length > 0;
 }
 
 export async function createInitialAdmin(
-  db: D1Database,
+  db: KVNamespace,
   username: string,
   digest: PasswordDigest,
 ): Promise<AdminUserRow> {
   const id = generateId();
-  await db.prepare(
-    `INSERT INTO admin_users (
-      id, username, password_hash, password_salt, password_iterations, must_change_password
-    ) VALUES (?, ?, ?, ?, ?, 1)`,
-  ).bind(id, username, digest.hash, digest.salt, digest.iterations).run();
-  return (await getAdminById(db, id))!;
+  const now = Math.floor(Date.now() / 1000);
+  const row: AdminUserRow = {
+    id,
+    username,
+    password_hash: digest.hash,
+    password_salt: digest.salt,
+    password_iterations: digest.iterations,
+    must_change_password: 1,
+    session_version: 1,
+    created_at: now,
+    updated_at: now,
+    last_login_at: null,
+  };
+  await kvPutJson(db, adminUserKey(id), row);
+  await db.put(adminUserByNameKey(username), id);
+  return row;
 }
 
-export async function recordAdminLogin(db: D1Database, id: string): Promise<void> {
-  await db.prepare('UPDATE admin_users SET last_login_at = ? WHERE id = ?')
-    .bind(Math.floor(Date.now() / 1000), id)
-    .run();
+export async function recordAdminLogin(db: KVNamespace, id: string): Promise<void> {
+  const row = await getAdminById(db, id);
+  if (!row) return;
+  row.last_login_at = Math.floor(Date.now() / 1000);
+  await kvPutJson(db, adminUserKey(id), row);
 }
 
 export async function updateAdminCredentials(
-  db: D1Database,
+  db: KVNamespace,
   id: string,
   username: string,
   digest: PasswordDigest,
 ): Promise<AdminUserRow> {
-  const now = Math.floor(Date.now() / 1000);
-  await db.prepare(
-    `UPDATE admin_users SET
-      username = ?, password_hash = ?, password_salt = ?, password_iterations = ?,
-      must_change_password = 0, session_version = session_version + 1, updated_at = ?
-    WHERE id = ?`,
-  ).bind(username, digest.hash, digest.salt, digest.iterations, now, id).run();
-  return (await getAdminById(db, id))!;
+  const row = await getAdminById(db, id);
+  if (!row) throw new Error('Admin user not found');
+  const previousUsername = row.username;
+  row.username = username;
+  row.password_hash = digest.hash;
+  row.password_salt = digest.salt;
+  row.password_iterations = digest.iterations;
+  row.must_change_password = 0;
+  row.session_version += 1;
+  row.updated_at = Math.floor(Date.now() / 1000);
+  await kvPutJson(db, adminUserKey(id), row);
+  if (previousUsername !== username) {
+    await kvDelete(db, adminUserByNameKey(previousUsername));
+    await db.put(adminUserByNameKey(username), id);
+  }
+  return row;
 }

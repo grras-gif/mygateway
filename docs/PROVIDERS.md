@@ -4,7 +4,8 @@
 [详细设计](DESIGN.md)，产品状态见 [PRD](PRD.md)。
 
 价格和供应商能力会变化。这里的结论最后核验于 **2026-08-11**；代码中的端点和模型建议以
-`src/shared/provider-presets.ts` 为准，数据库价格以 `migrations/0001_initial.sql` 中的当前发布基线为准。
+`src/shared/provider-presets.ts` 为准，内置价格基线以 `src/db/bootstrap.ts` 的种子数据为准
+（`migrations/0001_initial.sql` 仅保留为历史参考）。
 
 ## 1. 重点维护的 10 个预制
 

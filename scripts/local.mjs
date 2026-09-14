@@ -43,7 +43,7 @@ export function ensureLocalSecrets(filePath) {
     contents = setEnvValue(contents, 'MASTER_KEY', randomBytes(32).toString('base64'));
     generatedMasterKey = true;
   } else if (!validateMasterKey(currentMasterKey)) {
-    throw new Error('MASTER_KEY in .dev.vars must be base64 that decodes to exactly 32 bytes.');
+    throw new Error('MASTER_KEY in .env must be base64 that decodes to exactly 32 bytes.');
   }
 
   if (!envValue(contents, 'INITIAL_ADMIN_PASSWORD')) {
@@ -77,21 +77,18 @@ export function main(args = process.argv.slice(2)) {
 
   const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const wranglerBin = join(repositoryRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler');
 
   console.log('\nMyGateway local setup');
-  if (!existsSync(wranglerBin)) {
+  if (!existsSync(join(repositoryRoot, 'node_modules'))) {
     console.log('Installing dependencies from package-lock.json...');
     run(npm, ['ci', '--no-audit', '--no-fund'], repositoryRoot);
   }
 
-  const secrets = ensureLocalSecrets(join(repositoryRoot, '.dev.vars'));
+  const secrets = ensureLocalSecrets(join(repositoryRoot, '.env'));
   if (secrets.generatedMasterKey) console.log('Created the internal local encryption key.');
 
   console.log('Building the management console...');
   run(npm, ['run', 'build:dashboard'], repositoryRoot);
-  console.log('Applying local database migrations...');
-  run(npm, ['run', 'db:migrate:local'], repositoryRoot);
 
   const port = selectedPort(args);
   console.log(`\nOpen http://localhost:${port}`);

@@ -1,8 +1,10 @@
 node_modules/
 dist/
-.dev.vars
-.wrangler/
+.env
+.env.local
+.env.*.local
+!.env.example
+.edgeone/
 *.tmp
 test-results/
-.env.local
 ref/

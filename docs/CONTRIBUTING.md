@@ -3,13 +3,13 @@
 [English](CONTRIBUTING.md) · [简体中文](CONTRIBUTING.zh-CN.md)
 
 Thanks for your interest in MyGateway. The project is small by design: it runs
-on the Cloudflare free tier, prefers D1 + isolate memory over shared state, and
+on EdgeOne Makers, prefers one KV namespace + isolate memory over shared state, and
 prioritizes "simple to run and understand" over enterprise features.
 
 ## Project principles
 
-- **Free tier first.** No self-hosted services, no KV/R2/Queues/Durable
-  Objects unless the free allowance keeps working.
+- **Free allowance first.** No self-hosted services, no R2/Queues/Durable
+  Objects, and no extra KV namespaces unless the free allowance keeps working.
 - **Simple and predictable.** Fixed-priority routing, pre-response fallback,
   and no hidden background probing.
 - **Easy to use.** One key, one console; sensible defaults that work out of the
@@ -21,20 +21,22 @@ prioritizes "simple to run and understand" over enterprise features.
 ## Setting up
 
 ```bash
-npm run local            # install, initialize, build, migrate, and serve on http://localhost:8787
+npm install
+cp .env.example .env     # set INITIAL_ADMIN_PASSWORD and a local MASTER_KEY
+npm run dev              # console dev server on http://localhost:5173
 ```
 
 Admin login on first run uses the bootstrap credentials documented in
 [README.md](../README.md) (change them after login).
 
-For a faster manual loop after setup, run `npm run build:dashboard`, `npm run dev:setup`, and `npm run dev`
-separately. The one-command entry intentionally reuses these same project scripts.
+The gateway backend runs on the edge function runtime. To exercise `/v1/*`,
+`/admin/api/*`, and `/management/v1/*` end to end, deploy a preview of your
+EdgeOne Makers project and point the console at it.
 
 ## Development loop
 
 ```bash
-npm run test:fast          # docs, types, unit tests, Dashboard, Worker dry-run
-npm run test:e2e:serve     # local D1 + Worker in a separate terminal
+npm run test:fast          # docs, types, unit tests, Dashboard build, deploy config
 npm run test:api           # Admin and Management HTTP contracts
 npm run test:ui            # browser user journeys
 npm run test:system        # controlled-upstream routing and streaming
@@ -46,7 +48,7 @@ Before opening a PR make sure:
 1. `npm run test:fast` passes.
 2. Run every affected layer from the testing activity matrix.
 3. Release maintainers run `npm run test:release`; contributors without SIT credentials use `test:release:local`.
-4. Database schema changes are a new numbered migration in `migrations/`.
+4. KV key shapes are defined in `src/kv/keys.ts`; there is no SQL schema to migrate.
 5. New user-visible behavior is documented in `docs/PRD.md`; implementation
    details go in the relevant architecture or design document without copying
    the same section into every file.
@@ -55,11 +57,13 @@ Before opening a PR make sure:
 
 | Path | Purpose |
 |---|---|
+| `functions/` | Edge function entry (catch-all route + static asset fallthrough) |
 | `src/gateway/` | `/v1/*` request path: auth, routing, fallback, quota, caching |
 | `src/admin/` | `/admin/api/*` control plane |
-| `src/db/` | D1 statements for the different tables |
-| `migrations/` | D1 schema migrations (applied in order) |
-| `dashboard/` | SolidJS admin console (static assets served by the Worker) |
+| `src/db/` | Domain data access over KV |
+| `src/kv/` | Key prefixes and JSON/pagination helpers |
+| `migrations/` | Historical SQL baseline (read-only reference; not executed) |
+| `dashboard/` | SolidJS admin console (static assets published by EdgeOne Makers) |
 | `test/` | Vitest unit tests |
 | `e2e/` | Playwright UI, API, controlled-upstream, and real-provider suites |
 

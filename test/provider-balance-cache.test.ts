@@ -1,7 +1,7 @@
 /**
  * Provider-balance cache behavior used by the dashboard and management views.
  *
- * Mocks D1 (listChannels / getChannel / summaries), key decryption, and the
+ * Mocks KV (listChannels / getChannel / summaries), key decryption, and the
  * upstream DeepSeek balance endpoint, then exercises the admin handlers
  * exactly the way the dashboard does:
  *   - initial load: GET /admin/api/channels/balances            (cache-only)

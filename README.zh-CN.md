@@ -8,11 +8,11 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-[![部署到 Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Leon00x/mygateway)
+[![部署到 EdgeOne Makers](https://img.shields.io/badge/Deploy-EdgeOne%20Makers-0052D9)](https://console.cloud.tencent.com/edgeone/makers)
 
 [![CI](https://github.com/Leon00x/mygateway/actions/workflows/ci.yml/badge.svg)](https://github.com/Leon00x/mygateway/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+[![EdgeOne Makers](https://img.shields.io/badge/EdgeOne-Makers-0052D9?logo=tencentcloud&logoColor=white)](https://edgeone.ai/products/makers)
 
 </div>
 
@@ -20,7 +20,7 @@
 
 ## 为什么选择 MyGateway
 
-1. **一键部署到 Cloudflare**：无需维护服务器，默认架构适配 Cloudflare Free Tier，免费额度可以满足大多数个人和小团队的日常使用。
+1. **一键部署到 EdgeOne Makers**：无需维护服务器，静态控制台与边缘函数共用同一个 EdgeOne Makers 项目，默认架构适配平台免费额度，可满足大多数个人和小团队的日常使用。
 2. **一个模型可以使用多个渠道**：把不同供应商的同类模型放在同一个模型名称下，可按价格安排渠道优先级，也可以自定义调用顺序；首选渠道异常时自动切换。
 3. **通过熟悉的 AI Agent 管理网关**：提供官方 Skill，让 Codex、Claude Code、Pi 等 Agent 帮你检查网关状态、添加供应商和模型、管理调用密钥，以及查询余额、用量和日志。
 
@@ -30,10 +30,10 @@
 应用 / SDK
     │  Chat Completions · Responses · Messages
     ▼
-MyGateway Worker ── 鉴权与限额 ── 路由与 Fallback ── AI 供应商
+MyGateway 边缘函数 ── 鉴权与限额 ── 路由与 Fallback ── AI 供应商
     │
-    ├── SolidJS 管理控制台
-    └── D1：配置、用量聚合、可选请求日志
+    ├── SolidJS 管理控制台（静态资源）
+    └── KV：配置、用量聚合、可选请求日志
 ```
 
 ## 功能模块
@@ -53,7 +53,9 @@ MyGateway Worker ── 鉴权与限额 ── 路由与 Fallback ── AI 供�
 
 ## 一键部署
 
-直接点击 **部署到 Cloudflare**。Cloudflare 会在你的 GitHub 或 GitLab 账号下创建独立仓库，使用预填的 `mygateway` 名称创建 Worker 和 D1、执行 migration，并自动生成内部加密 Secret；无需提前 Fork。部署时唯一展示的应用配置是初始管理员密码，默认 `mygateway123`，用户可以在部署前修改。
+在 EdgeOne Makers 中从本仓库创建项目：构建流程使用 `npm install` 安装依赖、`npm run build:dashboard` 构建控制台，并以 `dashboard/dist` 作为静态资源目录；`functions/[[default]].ts` 处理 `/health`、`/v1/*`、`/admin/api/*` 和 `/management/v1/*`，其余路径回落到控制台。完整构建配置见 [`edgeone.json`](edgeone.json)。
+
+随后在项目中绑定名为 `DB` 的 KV 命名空间，并在 **项目 → 环境变量** 中配置 `MASTER_KEY` 与 `INITIAL_ADMIN_PASSWORD`。`MASTER_KEY` 由平台生成或由你提供；存入 Provider 凭据后请勿修改或轮换。
 
 首次登录凭据：
 
@@ -62,9 +64,9 @@ MyGateway Worker ── 鉴权与限额 ── 路由与 Fallback ── AI 供�
 密码：mygateway123
 ```
 
-首次登录后必须修改。`MASTER_KEY` 由 MyGateway 自动创建并作为内部 Cloudflare Secret 保存，日常无需管理；存入 Provider 凭据后请勿删除或轮换。
+首次登录后必须修改。基础设置和模型价格会在首次访问后端接口时自动写入 KV，无需执行 migration。
 
-升级、回滚、排障和免费额度规划见[部署指南](docs/DEPLOY.md)。
+升级、回滚、排障和额度规划见[部署指南](docs/DEPLOY.md)。
 
 ## 本地运行
 
@@ -73,10 +75,12 @@ MyGateway Worker ── 鉴权与限额 ── 路由与 Fallback ── AI 供�
 ```bash
 git clone https://github.com/Leon00x/mygateway.git
 cd mygateway
-npm run local
+npm install
+cp .env.example .env
+npm run dev
 ```
 
-该命令会在需要时安装锁定依赖、创建仅供本地使用的 Secret、构建控制台、执行 D1 migration，并在 <http://localhost:8787> 启动 MyGateway。本地数据保存在 Wrangler 的本地状态中。使用 `admin` / `mygateway123` 登录并修改凭据。
+`npm run dev` 会在 <http://localhost:5173> 启动控制台开发服务器。网关后端运行在边缘函数运行时中，要端到端验证 `/v1/*`、`/admin/api/*` 和 `/management/v1/*`，最直接的方式是为你的 EdgeOne Makers 项目创建预览部署。绑定为 `DB` 的 KV 命名空间会在首次访问后端接口时自动写入基础数据。
 
 手工开发流程和测试命令见[贡献指南](docs/CONTRIBUTING.zh-CN.md)。提交改动前运行：
 
@@ -89,7 +93,7 @@ npm run build
 ## 调用示例
 
 ```bash
-curl https://your-gateway.workers.dev/v1/chat/completions \
+curl https://your-project.edgeone.app/v1/chat/completions \
   -H "Authorization: Bearer YOUR_GATEWAY_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"your-model","messages":[{"role":"user","content":"你好"}]}'
@@ -106,7 +110,7 @@ MyGateway 提供官方 Skill，可以直接通过 Codex、Claude Code、Pi 等�
 ## 当前边界
 
 - Fallback 只能发生在响应内容开始发送前；流式输出开始后不能切换供应商。
-- RPM 和熔断状态是 isolate 内尽力控制；日 / 周 / 月 / 年请求和 Token 预算以 D1 每日台账为权威数据。
+- RPM 和熔断状态是 isolate 内尽力控制；日 / 周 / 月 / 年请求和 Token 预算以 KV 每日台账为权威数据。
 - Token 和费用依赖供应商上报，预估费用不等同于供应商账单。
 - 费用聚合目前没有币种维度，同一部署应统一使用一种记账币种。
 - 暂不支持 Embeddings、Images、Audio、Realtime、Batch、Files、多用户和 RBAC。
@@ -120,7 +124,7 @@ MyGateway 提供官方 Skill，可以直接通过 Codex、Claude Code、Pi 等�
 | [产品需求](docs/PRD.md) | 产品范围、实现状态、边界和 Roadmap |
 | [技术架构](docs/ARCHITECTURE.md) | 控制面、数据面、存储、缓存和一致性 |
 | [详细设计](docs/DESIGN.md) | 协议转换、供应商、模型发现、Analytics 和价格逻辑 |
-| [部署指南](docs/DEPLOY.md) | 部署、升级、回滚、排障和免费额度规划 |
+| [部署指南](docs/DEPLOY.md) | 部署、升级、回滚、排障和额度规划 |
 | [测试指南](docs/TESTING.md) | 单测、UI、可控上游和真实供应商验证 |
 | [贡献指南](docs/CONTRIBUTING.zh-CN.md) | 开发流程和贡献要求 |
 | [安全策略](docs/SECURITY.zh-CN.md) | 漏洞报告和部署方安全责任 |

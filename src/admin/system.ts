@@ -6,7 +6,7 @@ import { Env, parseConfig } from '../env.ts';
 import { PROVIDER_PRESETS } from '../shared/provider-presets.ts';
 import { gatewayErrorResponse } from '../http/errors.ts';
 import { json } from './router.ts';
-import { getSetting, setSetting } from '../db/settings.ts';
+import { getSetting, listSettings, setSetting } from '../db/settings.ts';
 import { invalidateLogPolicyCache } from '../gateway/log-policy.ts';
 import {
   DEFAULT_MAX_REQUEST_BODY_MIB,
@@ -55,11 +55,9 @@ export async function handleSystemSettings(
   requestId: string,
 ): Promise<Response> {
   if (request.method === 'GET') {
-    const result = await env.DB
-      .prepare('SELECT key, value, updated_at FROM system_settings')
-      .all();
+    const rows = await listSettings(env.DB);
     const settings: Record<string, { value: string; updated_at: number }> = {};
-    for (const row of result.results as { key: string; value: string; updated_at: number }[]) {
+    for (const row of rows) {
       settings[row.key] = { value: row.value, updated_at: row.updated_at };
     }
     return json({ settings });
@@ -68,15 +66,9 @@ export async function handleSystemSettings(
   if (request.method === 'PUT') {
     try {
       const body = (await request.json()) as Record<string, string>;
-      const now = Math.floor(Date.now() / 1000);
       for (const [key, rawValue] of Object.entries(body)) {
         const value = key === PUBLIC_URL_SETTING ? normalizePublicUrl(rawValue) : rawValue;
-        await env.DB
-          .prepare(
-            'INSERT INTO system_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?',
-          )
-          .bind(key, value, now, value, now)
-          .run();
+        await setSetting(env.DB, key, value);
       }
       return json({ ok: true });
     } catch (e) {

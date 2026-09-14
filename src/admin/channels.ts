@@ -172,7 +172,7 @@ function normalizeDetectedModels(input: unknown): DiscoveredProviderModel[] {
   return [...found.values()];
 }
 
-/** POST /admin/api/channels/preflight — no D1 writes. */
+/** POST /admin/api/channels/preflight — no KV writes. */
 export async function handleChannelPreflight(
   request: Request,
   env: Env,

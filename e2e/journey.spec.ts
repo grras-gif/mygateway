@@ -1,6 +1,6 @@
 /**
  * E2E: full user journey through the MyGateway admin dashboard.
- * Requires a local wrangler dev server on :8799 with a clean D1.
+ * Requires a deployed MyGateway instance on :8799 with a clean KV namespace.
  *
  * Flow (serial, one file):
  *   1. auth: guard → login page → wrong credentials → correct credentials → dashboard

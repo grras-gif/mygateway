@@ -16,6 +16,8 @@ export function applyServerTiming(response: Response, timing: GatewayResponseTim
   if (timing.access) {
     metrics.push(`gateway-cache;desc="${timing.access.cacheStatus}"`);
     metrics.push(`gateway-access;dur=${duration(timing.access.accessMs)}`);
+    // The `gateway-d1` metric name is kept for log/header compatibility; the
+    // value is now the KV lookup duration of the access resolution step.
     metrics.push(`gateway-d1;dur=${duration(timing.access.d1Ms)}`);
   }
   if (timing.upstreamTtfbMs !== undefined) {
@@ -26,8 +28,8 @@ export function applyServerTiming(response: Response, timing: GatewayResponseTim
   }
   if (metrics.length > 0) {
     const value = metrics.join(', ');
-    // Cloudflare may manage Server-Timing for its cfWorker/RUM metrics. Keep
-    // the standard header, and provide a stable gateway-specific equivalent.
+    // Keep the standard Server-Timing header, and provide a stable
+    // gateway-specific equivalent for clients that only read one of them.
     response.headers.set('Server-Timing', value);
     response.headers.set('X-Gateway-Timing', value);
   }

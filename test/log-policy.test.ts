@@ -2,31 +2,28 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { readLogPolicy, invalidateLogPolicyCache, resetLogPolicyCache } from '../src/gateway/log-policy.ts';
 import type { Env } from '../src/env.ts';
 import { recordRejectedRequest, recordRequestCompletion, type UsageRecordContext } from '../src/gateway/usage-recorder.ts';
+import { asKV, FakeKV } from './helpers/fake-kv.ts';
 
-const envOf = (db: D1Database) => ({ DB: db } as unknown as Env);
+// 32 zero bytes, base64 — a structurally valid MASTER_KEY for context encryption.
+const MASTER_KEY = btoa('\0'.repeat(32));
 
-/** Tracks every SQL statement executed against the fake D1. */
-function fakeDb(_rows: Record<string, unknown>) {
-  const statements: { sql: string; params: unknown[] }[] = [];
-  const db = {
-    prepare: (sql: string) => ({
-      bind: (...params: unknown[]) => ({
-        _sql: sql,
-        _params: params,
-        first: async () => null,
-        all: async () => ({ results: [] }),
-        run: async () => ({ meta: { changes: 1 } }),
-      }),
-    }),
-    batch: async (stmts: Array<{ _sql?: string; _params?: unknown[] }>) => {
-      for (const s of stmts) {
-        if (typeof s._sql === 'string') {
-          statements.push({ sql: s._sql, params: s._params ?? [] });
-        }
-      }
-    },
-  } as unknown as D1Database;
-  return { db, statements };
+const envOf = (fake: FakeKV) => ({ DB: asKV(fake), MASTER_KEY } as unknown as Env);
+
+/** Every stored request log record. */
+function logRecords(fake: FakeKV): Array<Record<string, unknown>> {
+  return [...fake.store.entries()]
+    .filter(([key]) => key.startsWith('request_log:'))
+    .map(([, value]) => JSON.parse(value) as Record<string, unknown>);
+}
+
+/** First stored record under a key prefix. */
+function firstRecord(fake: FakeKV, prefix: string): Record<string, unknown> | undefined {
+  const entry = [...fake.store.entries()].find(([key]) => key.startsWith(prefix));
+  return entry ? (JSON.parse(entry[1]) as Record<string, unknown>) : undefined;
+}
+
+function hasPrefix(fake: FakeKV, prefix: string): boolean {
+  return [...fake.store.keys()].some((key) => key.startsWith(prefix));
 }
 
 const defaultPolicy = () => ({ logsEnabled: true, logSuccess: true, logErrors: true, logContext: false });
@@ -50,52 +47,30 @@ const ctx = (overrides: Partial<UsageRecordContext> = {}): UsageRecordContext =>
   ...overrides,
 });
 
-function insertStatements(statements: { sql: string }[]): number {
-  return statements.filter((s) => s.sql.includes('INSERT INTO request_logs')).length;
-}
-
 describe('log policy', () => {
   beforeEach(() => resetLogPolicyCache());
   afterEach(() => resetLogPolicyCache());
 
   test('missing settings default correctly (logContext=false, others=true)', async () => {
-    let reads = 0;
-    const db = {
-      prepare: (sql: string) => ({
-        bind: (...params: unknown[]) => {
-          reads++;
-          return { first: async () => null, all: async () => ({ results: [] }), run: async () => ({ meta: {} }) };
-        },
-      }),
-    } as unknown as D1Database;
+    const fake = new FakeKV();
+    const db = asKV(fake);
     const policy = await readLogPolicy(db);
     expect(policy).toEqual({ logsEnabled: true, logSuccess: true, logErrors: true, logContext: false });
+    expect(fake.reads).toBe(4); // one get per key
     await readLogPolicy(db);
-    expect(reads).toBe(4); // one per key, cached after first read
+    expect(fake.reads).toBe(4); // cached after the first read
   });
 
   test('invalidateLogPolicyCache forces a re-read after an admin update', async () => {
-    const values: Record<string, string> = {
-      request_logs_enabled: 'true',
-      log_success: 'true',
-      log_errors: 'true',
-      log_context: 'false',
-    };
-    const db = {
-      prepare: (sql: string) => ({
-        bind: (...params: unknown[]) => {
-          const key = params[0] as string;
-          return {
-            first: async () => values[key] !== undefined ? { value: values[key] } : null,
-            all: async () => ({ results: [] }),
-            run: async () => ({ meta: {} }),
-          };
-        },
-      }),
-    } as unknown as D1Database;
+    const fake = new FakeKV()
+      .seed('setting:request_logs_enabled', { value: 'true', updated_at: 1 })
+      .seed('setting:log_success', { value: 'true', updated_at: 1 })
+      .seed('setting:log_errors', { value: 'true', updated_at: 1 })
+      .seed('setting:log_context', { value: 'false', updated_at: 1 });
+    const db = asKV(fake);
 
     expect((await readLogPolicy(db)).logErrors).toBe(true);
-    values['log_errors'] = 'false';
+    fake.seed('setting:log_errors', { value: 'false', updated_at: 2 });
     // cached → still true
     expect((await readLogPolicy(db)).logErrors).toBe(true);
     invalidateLogPolicyCache();
@@ -105,159 +80,153 @@ describe('log policy', () => {
 
 describe('usage recorder level gating', () => {
   test('success rows are skipped when log_success is off', async () => {
-    const { db, statements } = fakeDb({});
+    const fake = new FakeKV();
     await recordRequestCompletion(
-      envOf(db),
+      envOf(fake),
       ctx({ policy: { ...defaultPolicy(), logSuccess: false } }),
       'success',
       { inputTokens: 10, outputTokens: 5 },
       12,
     );
-    expect(insertStatements(statements)).toBe(0);
-    expect(statements.some((s) => s.sql.includes('INSERT INTO analytics_minutes'))).toBe(true);
-    expect(statements.some((s) => s.sql.includes('INSERT INTO key_daily_usage'))).toBe(true);
+    expect(logRecords(fake)).toHaveLength(0);
+    expect(hasPrefix(fake, 'analytics:')).toBe(true);
+    expect(hasPrefix(fake, 'key_usage:')).toBe(true);
   });
 
   test('error rows are skipped when log_errors is off', async () => {
-    const { db, statements } = fakeDb({});
+    const fake = new FakeKV();
     await recordRequestCompletion(
-      envOf(db),
+      envOf(fake),
       ctx({ policy: { ...defaultPolicy(), logErrors: false } }),
       'error',
       null,
       12,
       'upstream_http_500: boom',
     );
-    expect(insertStatements(statements)).toBe(0);
-    expect(statements.some((s) => s.sql.includes('INSERT INTO analytics_minutes'))).toBe(true);
+    expect(logRecords(fake)).toHaveLength(0);
+    expect(hasPrefix(fake, 'analytics:')).toBe(true);
   });
 
   test('all log rows skipped when request_logs_enabled is off', async () => {
-    const { db, statements } = fakeDb({});
+    const fake = new FakeKV();
     await recordRequestCompletion(
-      envOf(db),
+      envOf(fake),
       ctx({ policy: { ...defaultPolicy(), logsEnabled: false } }),
       'success',
       { inputTokens: 10, outputTokens: 5 },
       12,
     );
-    expect(insertStatements(statements)).toBe(0);
-    expect(statements.some((s) => s.sql.includes('INSERT INTO analytics_minutes'))).toBe(true);
-    expect(statements.some((s) => s.sql.includes('INSERT INTO key_daily_usage'))).toBe(true);
+    expect(logRecords(fake)).toHaveLength(0);
+    expect(hasPrefix(fake, 'analytics:')).toBe(true);
+    expect(hasPrefix(fake, 'key_usage:')).toBe(true);
   });
 
   test('error_detail is stored with error rows when enabled', async () => {
-    const { db, statements } = fakeDb({});
+    const fake = new FakeKV();
     await recordRequestCompletion(
-      envOf(db),
+      envOf(fake),
       ctx(),
       'error',
       null,
       12,
       'upstream_http_502: bad gateway',
     );
-    expect(insertStatements(statements)).toBe(1);
-    const insert = statements.find((s) => s.sql.includes('INSERT INTO request_logs'))!;
-    expect(insert.params).toContain('upstream_http_502: bad gateway');
+    const logs = logRecords(fake);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].error_detail).toBe('upstream_http_502: bad gateway');
   });
 
   test('rejected requests are gated by log_errors', async () => {
-    const { db, statements } = fakeDb({});
+    const fake = new FakeKV();
     await recordRejectedRequest(
-      envOf(db),
+      envOf(fake),
       { keyId: 'key-1', keyName: 'k', requestId: 'r', model: 'm', modelCardId: null },
       'rate_limited',
       5,
       { ...defaultPolicy(), logErrors: false },
       'rpm_limit_exceeded',
     );
-    expect(insertStatements(statements)).toBe(0);
+    expect(logRecords(fake)).toHaveLength(0);
   });
 
   test('rejected requests are gated by logsEnabled master switch', async () => {
-    const { db, statements } = fakeDb({});
+    const fake = new FakeKV();
     await recordRejectedRequest(
-      envOf(db),
+      envOf(fake),
       { keyId: 'key-1', keyName: 'k', requestId: 'r', model: 'm', modelCardId: null },
       'rate_limited',
       5,
       { ...defaultPolicy(), logsEnabled: false },
       'rpm_limit_exceeded',
     );
-    expect(insertStatements(statements)).toBe(0);
+    expect(logRecords(fake)).toHaveLength(0);
   });
 
   test('analytics always recorded even when all logs off', async () => {
-    const { db, statements } = fakeDb({});
+    const fake = new FakeKV();
     await recordRequestCompletion(
-      envOf(db),
+      envOf(fake),
       ctx({ policy: { logsEnabled: false, logSuccess: false, logErrors: false, logContext: false } }),
       'success',
       { inputTokens: 100, outputTokens: 50 },
       200,
     );
-    // analytics_minutes and key_daily_usage are always written.
-    // Batch contains analytics + key_daily_usage = 2 statements (no request log).
-    expect(statements.length).toBe(2);
-    expect(statements.some((s) => s.sql.includes('INSERT INTO analytics_minutes'))).toBe(true);
-    expect(statements.some((s) => s.sql.includes('INSERT INTO key_daily_usage'))).toBe(true);
-    expect(insertStatements(statements)).toBe(0);
+    // analytics + key_daily_usage are always written; no request log.
+    expect(logRecords(fake)).toHaveLength(0);
+    expect(hasPrefix(fake, 'analytics:')).toBe(true);
+    expect(hasPrefix(fake, 'key_usage:')).toBe(true);
   });
 
   test('provider cache hits are aggregated separately from total input tokens', async () => {
-    const { db, statements } = fakeDb({});
+    const fake = new FakeKV();
     await recordRequestCompletion(
-      envOf(db),
+      envOf(fake),
       ctx({ policy: { ...defaultPolicy(), logsEnabled: false } }),
       'success',
       { inputTokens: 100, cacheTokens: 40, outputTokens: 25 },
       200,
     );
-    const analyticsStmt = statements.find((s) => s.sql.includes('INSERT INTO analytics_minutes'));
-    expect(analyticsStmt).toBeDefined();
-    expect(analyticsStmt!.sql).toContain('input_tokens, cache_input_tokens, output_tokens');
-    expect(analyticsStmt!.params.slice(12, 15)).toEqual([100, 40, 25]);
+    const analytics = firstRecord(fake, 'analytics:');
+    expect(analytics).toBeDefined();
+    expect(analytics!.input_tokens).toBe(100);
+    expect(analytics!.cache_input_tokens).toBe(40);
+    expect(analytics!.output_tokens).toBe(25);
   });
 
   test('TTFT is recorded in analytics when stream=true', async () => {
-    const { db, statements } = fakeDb({});
+    const fake = new FakeKV();
     await recordRequestCompletion(
-      envOf(db),
+      envOf(fake),
       ctx({ stream: true, ttftMs: 345 }),
       'success',
       { inputTokens: 50, outputTokens: 30 },
       500,
     );
-    const analyticsStmt = statements.find((s) => s.sql.includes('INSERT INTO analytics_minutes'));
-    expect(analyticsStmt).toBeDefined();
-    // ttft_ms_sum should be 345, ttft_ms_count should be 1
-    const sumIdx = analyticsStmt!.params.length - 2;
-    const countIdx = analyticsStmt!.params.length - 1;
-    expect(analyticsStmt!.params[sumIdx]).toBe(345);
-    expect(analyticsStmt!.params[countIdx]).toBe(1);
+    const analytics = firstRecord(fake, 'analytics:');
+    expect(analytics).toBeDefined();
+    expect(analytics!.ttft_ms_sum).toBe(345);
+    expect(analytics!.ttft_ms_count).toBe(1);
   });
 
   test('TTFT not recorded for non-streaming requests', async () => {
-    const { db, statements } = fakeDb({});
+    const fake = new FakeKV();
     await recordRequestCompletion(
-      envOf(db),
+      envOf(fake),
       ctx({ stream: false, ttftMs: undefined }),
       'success',
       { inputTokens: 50, outputTokens: 30 },
       500,
     );
-    const analyticsStmt = statements.find((s) => s.sql.includes('INSERT INTO analytics_minutes'));
-    expect(analyticsStmt).toBeDefined();
-    const sumIdx = analyticsStmt!.params.length - 2;
-    const countIdx = analyticsStmt!.params.length - 1;
-    expect(analyticsStmt!.params[sumIdx]).toBe(0);
-    expect(analyticsStmt!.params[countIdx]).toBe(0);
+    const analytics = firstRecord(fake, 'analytics:');
+    expect(analytics).toBeDefined();
+    expect(analytics!.ttft_ms_sum).toBe(0);
+    expect(analytics!.ttft_ms_count).toBe(0);
   });
 
   test('context not written when log_context is off', async () => {
-    const { db, statements } = fakeDb({});
+    const fake = new FakeKV();
     await recordRequestCompletion(
-      envOf(db),
+      envOf(fake),
       ctx({
         policy: { ...defaultPolicy(), logContext: false },
         contextRequest: 'hello world',
@@ -267,104 +236,104 @@ describe('usage recorder level gating', () => {
       { inputTokens: 10, outputTokens: 5 },
       12,
     );
-    const insert = statements.find((s) => s.sql.includes('INSERT INTO request_logs'));
-    expect(insert).toBeDefined();
-    // context columns should be null
-    const cols = insert!.sql;
-    expect(cols).toContain('context_request_iv');
-    // The params for context columns should be null
-    const nullCount = insert!.params.filter((p: unknown) => p === null).length;
-    expect(nullCount).toBeGreaterThanOrEqual(6); // 6 context columns all null
+    const logs = logRecords(fake);
+    expect(logs).toHaveLength(1);
+    for (const column of [
+      'context_request_iv',
+      'context_request_tag',
+      'context_request_ciphertext',
+      'context_response_iv',
+      'context_response_tag',
+      'context_response_ciphertext',
+    ]) {
+      expect(logs[0][column]).toBeNull();
+    }
   });
 
-  test('batch statement counts: completed with log = 3 statements (analytics + key + log)', async () => {
-    const { db, statements } = fakeDb({});
+  test('storage counts: completed with log = analytics + key usage + log', async () => {
+    const fake = new FakeKV();
     await recordRequestCompletion(
-      envOf(db),
+      envOf(fake),
       ctx({ policy: defaultPolicy() }),
       'success',
       { inputTokens: 10, outputTokens: 5 },
       12,
     );
-    // analytics_minutes + key_daily_usage + request_logs = 3
-    expect(statements.length).toBe(3);
+    expect(hasPrefix(fake, 'analytics:')).toBe(true);
+    expect(hasPrefix(fake, 'key_usage:')).toBe(true);
+    expect(logRecords(fake)).toHaveLength(1);
   });
 
-  test('batch statement counts: completed without log = 2 statements', async () => {
-    const { db, statements } = fakeDb({});
+  test('storage counts: completed without log = analytics + key usage only', async () => {
+    const fake = new FakeKV();
     await recordRequestCompletion(
-      envOf(db),
+      envOf(fake),
       ctx({ policy: { ...defaultPolicy(), logsEnabled: false } }),
       'success',
       { inputTokens: 10, outputTokens: 5 },
       12,
     );
-    // analytics_minutes + key_daily_usage only
-    expect(statements.length).toBe(2);
+    expect(hasPrefix(fake, 'analytics:')).toBe(true);
+    expect(hasPrefix(fake, 'key_usage:')).toBe(true);
+    expect(logRecords(fake)).toHaveLength(0);
   });
 
-  test('batch statement counts: rejected with log = 2 statements', async () => {
-    const { db, statements } = fakeDb({});
+  test('storage counts: rejected with log = analytics + log', async () => {
+    const fake = new FakeKV();
     await recordRejectedRequest(
-      envOf(db),
+      envOf(fake),
       { keyId: 'key-1', keyName: 'k', requestId: 'r', model: 'm', modelCardId: null },
       'rate_limited',
       5,
       defaultPolicy(),
       'rpm_limit_exceeded',
     );
-    // analytics_minutes + request_logs
-    expect(statements.length).toBe(2);
+    expect(hasPrefix(fake, 'analytics:')).toBe(true);
+    expect(hasPrefix(fake, 'key_usage:')).toBe(false);
+    expect(logRecords(fake)).toHaveLength(1);
   });
 
-  test('batch statement counts: rejected without log = 1 statement', async () => {
-    const { db, statements } = fakeDb({});
+  test('storage counts: rejected without log = analytics only', async () => {
+    const fake = new FakeKV();
     await recordRejectedRequest(
-      envOf(db),
+      envOf(fake),
       { keyId: 'key-1', keyName: 'k', requestId: 'r', model: 'm', modelCardId: null },
       'rate_limited',
       5,
       { ...defaultPolicy(), logsEnabled: false },
       'rpm_limit_exceeded',
     );
-    // analytics_minutes only
-    expect(statements.length).toBe(1);
+    expect(hasPrefix(fake, 'analytics:')).toBe(true);
+    expect(logRecords(fake)).toHaveLength(0);
   });
 
   test('request_logs includes ttft_ms and requested_protocol', async () => {
-    const { db, statements } = fakeDb({});
+    const fake = new FakeKV();
     await recordRequestCompletion(
-      envOf(db),
+      envOf(fake),
       ctx({ stream: true, ttftMs: 123, requestedProtocol: 'openai_chat' }),
       'success',
       { inputTokens: 10, outputTokens: 5 },
       450,
     );
-    const insert = statements.find((s) => s.sql.includes('INSERT INTO request_logs'));
-    expect(insert).toBeDefined();
-    expect(insert!.sql).toContain('ttft_ms');
-    expect(insert!.sql).toContain('requested_protocol');
-    // Find ttft_ms value in params
-    expect(insert!.params).toContain(123);
-    expect(insert!.params).toContain('openai_chat');
+    const logs = logRecords(fake);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].ttft_ms).toBe(123);
+    expect(logs[0].requested_protocol).toBe('openai_chat');
   });
 
   test('rejected request_logs includes ttft_ms (null)', async () => {
-    const { db, statements } = fakeDb({});
+    const fake = new FakeKV();
     await recordRejectedRequest(
-      envOf(db),
+      envOf(fake),
       { keyId: 'key-1', keyName: 'k', requestId: 'r', model: 'm', modelCardId: null },
       'rate_limited',
       5,
       defaultPolicy(),
       'rpm_limit_exceeded',
     );
-    const insert = statements.find((s) => s.sql.includes('INSERT INTO request_logs'));
-    expect(insert).toBeDefined();
-    expect(insert!.sql).toContain('ttft_ms');
-    // ttft_ms should be null for rejected request
-    // Count nulls - ttft_ms, model_card_id, channel_id, channel_name should all be null
-    const nullCount = insert!.params.filter((p: unknown) => p === null).length;
-    expect(nullCount).toBeGreaterThanOrEqual(2);
+    const logs = logRecords(fake);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].ttft_ms).toBeNull();
   });
 });

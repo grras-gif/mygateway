@@ -1,3 +1,14 @@
+/** Provider-model inventory and discovery state (KV-backed). */
+
+import {
+  discoveryKey,
+  KEY_PREFIX,
+  providerModelKey,
+  providerModelPrefix,
+} from '../kv/keys.ts';
+import { kvDelete, kvGetJson, kvListJson, kvPutJson } from '../kv/store.ts';
+import { listChannels } from './channels.ts';
+
 export type ProviderModelSource = 'discovered' | 'manual' | 'preset';
 export type ProviderModelAvailability = 'available' | 'missing' | 'unknown';
 
@@ -40,87 +51,77 @@ export interface ChannelModelSummary {
   error_summary: string | null;
 }
 
-interface ChannelModelSummaryQueryRow {
-  channel_id: string;
-  model_count: number;
-  available_count: number;
-  imported_count: number;
-  preview_json: string;
-  discovery_status: DiscoveryStateRow['status'] | null;
-  last_success_at: number | null;
-  error_summary: string | null;
+/** One pass over channels + inventory; never queries per card repeatedly. */
+export async function listChannelModelSummaries(db: KVNamespace): Promise<ChannelModelSummary[]> {
+  const [channels, providerModels, discoveryStates] = await Promise.all([
+    listChannels(db),
+    kvListJson<ProviderModelRow>(db, KEY_PREFIX.providerModel),
+    kvListJson<DiscoveryStateRow>(db, KEY_PREFIX.discovery),
+  ]);
+  const discoveryByChannel = new Map(discoveryStates.map((state) => [state.channel_id, state]));
+
+  return channels.map((channel) => {
+    const models = providerModels.filter((model) => model.channel_id === channel.id);
+    const preview = models
+      .filter((model) => model.availability === 'available')
+      .sort((a, b) => a.provider_model_id.localeCompare(b.provider_model_id))
+      .slice(0, 3)
+      .map((model) => ({
+        provider_model_id: model.provider_model_id,
+        display_name: model.display_name,
+      }));
+    const discovery = discoveryByChannel.get(channel.id);
+    return {
+      channel_id: channel.id,
+      model_count: models.length,
+      available_count: models.filter((model) => model.availability === 'available').length,
+      imported_count: models.filter((model) => model.imported_model_card_id !== null).length,
+      preview,
+      discovery_status: discovery?.status ?? 'never',
+      last_success_at: discovery?.last_success_at ?? null,
+      error_summary: discovery?.error_summary ?? null,
+    };
+  });
 }
 
-/** One indexed statement for every channel card; never queries per card. */
-export async function listChannelModelSummaries(db: D1Database): Promise<ChannelModelSummary[]> {
-  const result = await db.prepare(
-    `SELECT c.id AS channel_id,
-       COUNT(cpm.provider_model_id) AS model_count,
-       COALESCE(SUM(CASE WHEN cpm.availability = 'available' THEN 1 ELSE 0 END), 0) AS available_count,
-       COALESCE(SUM(CASE WHEN cpm.imported_model_card_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS imported_count,
-       COALESCE((SELECT json_group_array(json_object(
-         'provider_model_id', preview.provider_model_id,
-         'display_name', preview.display_name
-       )) FROM (
-         SELECT provider_model_id, display_name FROM channel_provider_models
-         WHERE channel_id = c.id AND availability = 'available'
-         ORDER BY provider_model_id ASC LIMIT 3
-       ) AS preview), '[]') AS preview_json,
-       cmd.status AS discovery_status, cmd.last_success_at, cmd.error_summary
-     FROM channels c
-     LEFT JOIN channel_provider_models cpm ON cpm.channel_id = c.id
-     LEFT JOIN channel_model_discovery cmd ON cmd.channel_id = c.id
-     WHERE c.deleted_at IS NULL
-     GROUP BY c.id
-     ORDER BY c.created_at DESC`,
-  ).all<ChannelModelSummaryQueryRow>();
-  return result.results.map((row) => ({
-    channel_id: row.channel_id,
-    model_count: Number(row.model_count),
-    available_count: Number(row.available_count),
-    imported_count: Number(row.imported_count),
-    preview: JSON.parse(row.preview_json) as ChannelModelSummary['preview'],
-    discovery_status: row.discovery_status ?? 'never',
-    last_success_at: row.last_success_at,
-    error_summary: row.error_summary,
-  }));
-}
-
-export async function listProviderModels(db: D1Database, channelId: string): Promise<ProviderModelRow[]> {
-  const result = await db.prepare(
-    `SELECT * FROM channel_provider_models WHERE channel_id = ?
-     ORDER BY availability = 'available' DESC, provider_model_id ASC`,
-  ).bind(channelId).all<ProviderModelRow>();
-  return result.results;
+export async function listProviderModels(db: KVNamespace, channelId: string): Promise<ProviderModelRow[]> {
+  const models = await kvListJson<ProviderModelRow>(db, providerModelPrefix(channelId));
+  return models.sort((a, b) => {
+    const availabilityRank = (row: ProviderModelRow) => (row.availability === 'available' ? 0 : 1);
+    return availabilityRank(a) - availabilityRank(b)
+      || a.provider_model_id.localeCompare(b.provider_model_id);
+  });
 }
 
 export async function getProviderModel(
-  db: D1Database,
+  db: KVNamespace,
   channelId: string,
   providerModelId: string,
 ): Promise<ProviderModelRow | null> {
-  return db.prepare(
-    'SELECT * FROM channel_provider_models WHERE channel_id = ? AND provider_model_id = ?',
-  ).bind(channelId, providerModelId).first<ProviderModelRow>();
+  return kvGetJson<ProviderModelRow>(db, providerModelKey(channelId, providerModelId));
 }
 
-export async function getDiscoveryState(db: D1Database, channelId: string): Promise<DiscoveryStateRow | null> {
-  return db.prepare('SELECT * FROM channel_model_discovery WHERE channel_id = ?')
-    .bind(channelId).first<DiscoveryStateRow>();
+export async function getDiscoveryState(db: KVNamespace, channelId: string): Promise<DiscoveryStateRow | null> {
+  return kvGetJson<DiscoveryStateRow>(db, discoveryKey(channelId));
 }
 
-export async function saveDiscoveryError(db: D1Database, channelId: string, message: string): Promise<void> {
+export async function saveDiscoveryError(db: KVNamespace, channelId: string, message: string): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
-  await db.prepare(
-    `INSERT INTO channel_model_discovery (channel_id, status, last_attempt_at, error_summary)
-     VALUES (?, 'error', ?, ?)
-     ON CONFLICT(channel_id) DO UPDATE SET status = 'error', last_attempt_at = excluded.last_attempt_at,
-       error_summary = excluded.error_summary`,
-  ).bind(channelId, now, message.slice(0, 300)).run();
+  const existing = await getDiscoveryState(db, channelId);
+  const state: DiscoveryStateRow = {
+    channel_id: channelId,
+    status: 'error',
+    result_hash: existing?.result_hash ?? null,
+    model_count: existing?.model_count ?? 0,
+    last_attempt_at: now,
+    last_success_at: existing?.last_success_at ?? null,
+    error_summary: message.slice(0, 300),
+  };
+  await kvPutJson(db, discoveryKey(channelId), state);
 }
 
 export async function syncDiscoveredProviderModels(
-  db: D1Database,
+  db: KVNamespace,
   channelId: string,
   models: DiscoveredProviderModel[],
   resultHash: string,
@@ -132,70 +133,74 @@ export async function syncDiscoveredProviderModels(
     const current = await listProviderModels(db, channelId);
     for (const row of current) {
       if (row.source === 'discovered' && !ids.has(row.provider_model_id)) {
-        await db.prepare(
-          `UPDATE channel_provider_models SET availability = 'missing', updated_at = ?
-           WHERE channel_id = ? AND provider_model_id = ?`,
-        ).bind(now, channelId, row.provider_model_id).run();
+        row.availability = 'missing';
+        row.updated_at = now;
+        await kvPutJson(db, providerModelKey(channelId, row.provider_model_id), row);
       }
     }
     for (const model of models) {
-      await db.prepare(
-        `INSERT INTO channel_provider_models
-          (channel_id, provider_model_id, display_name, source, availability, capabilities_json, updated_at)
-         VALUES (?, ?, ?, 'discovered', 'available', ?, ?)
-         ON CONFLICT(channel_id, provider_model_id) DO UPDATE SET
-           display_name = excluded.display_name,
-           source = CASE WHEN channel_provider_models.source = 'manual' THEN 'manual' ELSE 'discovered' END,
-           availability = 'available', capabilities_json = excluded.capabilities_json,
-           updated_at = excluded.updated_at`,
-      ).bind(
-        channelId,
-        model.id,
-        model.displayName,
-        model.capabilities === undefined ? null : JSON.stringify(model.capabilities),
-        now,
-      ).run();
+      const existing = await getProviderModel(db, channelId, model.id);
+      const row: ProviderModelRow = {
+        channel_id: channelId,
+        provider_model_id: model.id,
+        display_name: model.displayName,
+        source: existing?.source === 'manual' ? 'manual' : 'discovered',
+        availability: 'available',
+        capabilities_json: model.capabilities === undefined ? null : JSON.stringify(model.capabilities),
+        imported_model_card_id: existing?.imported_model_card_id ?? null,
+        created_at: existing?.created_at ?? now,
+        updated_at: now,
+      };
+      await kvPutJson(db, providerModelKey(channelId, model.id), row);
     }
   }
-  await db.prepare(
-    `INSERT INTO channel_model_discovery
-      (channel_id, status, result_hash, model_count, last_attempt_at, last_success_at, error_summary)
-     VALUES (?, 'ok', ?, ?, ?, ?, NULL)
-     ON CONFLICT(channel_id) DO UPDATE SET status = 'ok', result_hash = excluded.result_hash,
-       model_count = excluded.model_count, last_attempt_at = excluded.last_attempt_at,
-       last_success_at = excluded.last_success_at, error_summary = NULL`,
-  ).bind(channelId, resultHash, models.length, now, now).run();
+  const updated: DiscoveryStateRow = {
+    channel_id: channelId,
+    status: 'ok',
+    result_hash: resultHash,
+    model_count: models.length,
+    last_attempt_at: now,
+    last_success_at: now,
+    error_summary: null,
+  };
+  await kvPutJson(db, discoveryKey(channelId), updated);
 }
 
 export async function addManualProviderModel(
-  db: D1Database,
+  db: KVNamespace,
   channelId: string,
   providerModelId: string,
   displayName: string,
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
-  await db.prepare(
-    `INSERT INTO channel_provider_models
-      (channel_id, provider_model_id, display_name, source, availability, updated_at)
-     VALUES (?, ?, ?, 'manual', 'available', ?)
-     ON CONFLICT(channel_id, provider_model_id) DO UPDATE SET display_name = excluded.display_name,
-       source = 'manual', availability = 'available', updated_at = excluded.updated_at`,
-  ).bind(channelId, providerModelId, displayName, now).run();
+  const existing = await getProviderModel(db, channelId, providerModelId);
+  const row: ProviderModelRow = {
+    channel_id: channelId,
+    provider_model_id: providerModelId,
+    display_name: displayName,
+    source: 'manual',
+    availability: 'available',
+    capabilities_json: existing?.capabilities_json ?? null,
+    imported_model_card_id: existing?.imported_model_card_id ?? null,
+    created_at: existing?.created_at ?? now,
+    updated_at: now,
+  };
+  await kvPutJson(db, providerModelKey(channelId, providerModelId), row);
 }
 
-export async function deleteProviderModel(db: D1Database, channelId: string, providerModelId: string): Promise<void> {
-  await db.prepare('DELETE FROM channel_provider_models WHERE channel_id = ? AND provider_model_id = ?')
-    .bind(channelId, providerModelId).run();
+export async function deleteProviderModel(db: KVNamespace, channelId: string, providerModelId: string): Promise<void> {
+  await kvDelete(db, providerModelKey(channelId, providerModelId));
 }
 
 export async function markProviderModelImported(
-  db: D1Database,
+  db: KVNamespace,
   channelId: string,
   providerModelId: string,
   modelCardId: string,
 ): Promise<void> {
-  await db.prepare(
-    `UPDATE channel_provider_models SET imported_model_card_id = ?, updated_at = unixepoch()
-     WHERE channel_id = ? AND provider_model_id = ?`,
-  ).bind(modelCardId, channelId, providerModelId).run();
+  const row = await getProviderModel(db, channelId, providerModelId);
+  if (!row) return;
+  row.imported_model_card_id = modelCardId;
+  row.updated_at = Math.floor(Date.now() / 1000);
+  await kvPutJson(db, providerModelKey(channelId, providerModelId), row);
 }

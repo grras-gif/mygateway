@@ -9,10 +9,10 @@
 | 领域 | 文档 | 语言 | 权威范围 |
 |---|---|---|---|
 | 产品 | [PRD](PRD.md) | 中文 | 产品范围、实现状态、边界和 Roadmap，是产品行为的权威来源 |
-| 架构 | [技术架构](ARCHITECTURE.md) | 中文 | 系统边界、数据流、D1、缓存、安全和一致性 |
+| 架构 | [技术架构](ARCHITECTURE.md) | 中文 | 系统边界、数据流、KV、缓存、安全和一致性 |
 | 设计 | [详细设计](DESIGN.md) | 中文 | 协议、供应商、模型、Analytics、价格和管理 API 决策 |
 | 供应商 | [供应商与模型](PROVIDERS.md) | 中文 | 供应商预制、模型价格基线和余额支持情况 |
-| 部署 | [中文](DEPLOY.md) · [English](DEPLOY.en.md) | 中文 / EN | 部署、升级、回滚、排障和免费额度规划 |
+| 部署 | [中文](DEPLOY.md) · [English](DEPLOY.en.md) | 中文 / EN | 部署、升级、回滚、排障和额度规划 |
 | 测试 | [测试指南](TESTING.md) | 中文 | 测试分层、Fixture、集成测试和发布检查 |
 | 贡献 | [中文](CONTRIBUTING.zh-CN.md) · [English](CONTRIBUTING.md) | 中文 / EN | 开发流程和 Pull Request 要求 |
 | 安全 | [中文](SECURITY.zh-CN.md) · [English](SECURITY.md) | 中文 / EN | 私密漏洞报告和部署方责任 |
@@ -30,7 +30,7 @@
 ## 维护规则
 
 - `PRD.md` 是用户可见行为和 Roadmap 状态的权威来源。
-- migration 是数据库 Schema 的权威来源；`0001_initial.sql` 是公开发布基线，已发布 migration 不得修改。
+- KV 键结构统一在 `src/kv/keys.ts` 定义；`migrations/0001_initial.sql` 是已冻结的公开 SQL 基线，运行时不执行。
 - 架构文档描述已经实现的系统结构，详细设计文档解释具体决策。
 - README 保持精简，通过链接进入详细文档，不重复实现细节。
 - 修改双语公共文档时，应同步更新两种语言版本。

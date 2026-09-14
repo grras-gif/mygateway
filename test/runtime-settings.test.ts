@@ -6,20 +6,14 @@ import {
   readMaxRequestBytes,
   resetRuntimeSettingsCache,
 } from '../src/gateway/runtime-settings.ts';
+import { asKV, FakeKV } from './helpers/fake-kv.ts';
 
 function fakeSettingsDb(value: string | null) {
-  let reads = 0;
-  const db = {
-    prepare: () => ({
-      bind: () => ({
-        first: async () => {
-          reads++;
-          return value === null ? null : { value };
-        },
-      }),
-    }),
-  } as unknown as D1Database;
-  return { db, reads: () => reads };
+  const fake = new FakeKV();
+  if (value !== null) {
+    fake.seed('setting:max_request_body_bytes', { value, updated_at: 1 });
+  }
+  return { db: asKV(fake), reads: () => fake.reads };
 }
 
 describe('gateway runtime settings', () => {

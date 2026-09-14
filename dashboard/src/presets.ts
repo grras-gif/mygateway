@@ -27,7 +27,7 @@ export function resolvedChannelPresetId(channel: {
 /**
  * Localize preset defaults while preserving names explicitly customized by
  * the administrator. Both old Chinese defaults and new canonical English
- * defaults are recognized so existing D1 rows need no migration.
+ * defaults are recognized so existing stored rows need no migration.
  */
 export function localizedChannelName(
   name: string,

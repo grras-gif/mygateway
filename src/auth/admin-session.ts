@@ -1,4 +1,4 @@
-/** Signed administrator session cookie with D1-backed invalidation. */
+/** Signed administrator session cookie with KV-backed invalidation. */
 
 import { getAdminById } from '../db/admin-users.ts';
 
@@ -30,7 +30,7 @@ function encodeBase64Url(bytes: Uint8Array): string {
   return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 }
 
-function decodeBase64Url(value: string): Uint8Array {
+function decodeBase64Url(value: string): Uint8Array<ArrayBuffer> {
   const base64 = value.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
   return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
 }
@@ -97,7 +97,7 @@ export async function createAdminSession(
 
 export async function validateAdminSession(
   request: Request,
-  db: D1Database,
+  db: KVNamespace,
   masterKey: string,
 ): Promise<AdminSession | null> {
   const cookie = (request.headers.get('cookie') ?? '')

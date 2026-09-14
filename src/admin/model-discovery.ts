@@ -13,9 +13,14 @@ import {
   type DiscoveredProviderModel,
 } from '../db/provider-models.ts';
 import {
+  countChannelModels,
   createChannelModel,
   createIdentifier,
   createModelCard,
+  deleteChannelModel,
+  deleteIdentifier,
+  deleteIdentifiersByModelCard,
+  deleteModelCard,
   getChannelModelForCardChannel,
   getModelCard,
   resolveIdentifier,
@@ -183,7 +188,7 @@ async function modelHash(models: DiscoveredProviderModel[]): Promise<string> {
 
 /** Persist a previously completed preflight result after channel creation. */
 export async function persistDiscoveredProviderModels(
-  db: D1Database,
+  db: KVNamespace,
   channelId: string,
   models: DiscoveredProviderModel[],
 ): Promise<void> {
@@ -333,14 +338,12 @@ export async function handleChannelModelImport(
     }
     const instanceId = generateId();
     const existingCard = await getModelCard(env.DB, modelCardId);
-    const count = await env.DB.prepare(
-      'SELECT COUNT(*) AS count FROM channel_models WHERE model_card_id = ? AND deleted_at IS NULL',
-    ).bind(modelCardId).first<{ count: number }>();
+    const instanceCount = await countChannelModels(env.DB, modelCardId);
     try {
       await createChannelModel(env.DB, {
         id: instanceId, model_card_id: modelCardId, channel_id: channelId,
         channel_model_id: providerModelId, public_model_alias: alias,
-        sort_order: count?.count ?? 0, status: 'active',
+        sort_order: instanceCount, status: 'active',
         supports_stream_usage: getPresetById(inferPresetId(channel) ?? '')?.supports_stream_usage ? 1 : 0,
         input_price_micros_per_million: resolvePrice(providerModelId).input,
         output_price_micros_per_million: resolvePrice(providerModelId).output,
@@ -354,11 +357,11 @@ export async function handleChannelModelImport(
       await markProviderModelImported(env.DB, channelId, providerModelId, modelCardId);
       results.push({ provider_model_id: providerModelId, ok: true, created, unified_model_id: unifiedId, alias });
     } catch (error) {
-      await env.DB.prepare('DELETE FROM model_identifiers WHERE identifier = ?').bind(alias).run();
-      await env.DB.prepare('DELETE FROM channel_models WHERE id = ?').bind(instanceId).run();
+      await deleteIdentifier(env.DB, alias);
+      await deleteChannelModel(env.DB, instanceId);
       if (created) {
-        await env.DB.prepare('DELETE FROM model_identifiers WHERE model_card_id = ?').bind(modelCardId).run();
-        await env.DB.prepare('DELETE FROM model_cards WHERE id = ?').bind(modelCardId).run();
+        await deleteIdentifiersByModelCard(env.DB, modelCardId);
+        await deleteModelCard(env.DB, modelCardId);
       }
       results.push({
         provider_model_id: providerModelId, ok: false,

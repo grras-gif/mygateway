@@ -1,6 +1,6 @@
 /** Password hashing for the single administrator account. */
 
-// Cloudflare Workers supports PBKDF2 iteration counts up to 100,000.
+// Edge runtimes support PBKDF2 iteration counts up to 100,000.
 export const PASSWORD_ITERATIONS = 100_000;
 
 export interface PasswordDigest {
@@ -14,11 +14,15 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function base64ToBytes(value: string): Uint8Array {
+function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
 }
 
-async function derive(password: string, salt: Uint8Array, iterations: number): Promise<Uint8Array> {
+async function derive(
+  password: string,
+  salt: Uint8Array<ArrayBuffer>,
+  iterations: number,
+): Promise<Uint8Array<ArrayBuffer>> {
   const material = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(password),

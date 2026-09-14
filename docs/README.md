@@ -9,10 +9,10 @@ This directory keeps product decisions, engineering constraints, operations, and
 | Area | Document | Language | What it owns |
 |---|---|---|---|
 | Product | [PRD](PRD.md) | 中文 | Scope, implementation status, boundaries, and roadmap—the product source of truth |
-| Architecture | [Architecture](ARCHITECTURE.md) | 中文 | System boundaries, data flow, D1, caching, security, and consistency |
+| Architecture | [Architecture](ARCHITECTURE.md) | 中文 | System boundaries, data flow, KV, caching, security, and consistency |
 | Design | [Detailed design](DESIGN.md) | 中文 | Protocol, provider, model, analytics, pricing, and management API decisions |
 | Providers | [Providers and models](PROVIDERS.md) | 中文 | Provider presets, model pricing baselines, and balance support |
-| Deployment | [English](DEPLOY.en.md) · [中文](DEPLOY.md) | EN / 中文 | Deployment, upgrades, rollback, troubleshooting, and Free Tier planning |
+| Deployment | [English](DEPLOY.en.md) · [中文](DEPLOY.md) | EN / 中文 | Deployment, upgrades, rollback, troubleshooting, and quota planning |
 | Testing | [Testing guide](TESTING.md) | 中文 | Test layers, fixtures, integration tests, and release checks |
 | Contribution | [English](CONTRIBUTING.md) · [中文](CONTRIBUTING.zh-CN.md) | EN / 中文 | Development workflow and pull request requirements |
 | Security | [English](SECURITY.md) · [中文](SECURITY.zh-CN.md) | EN / 中文 | Private disclosure and deployment responsibilities |
@@ -30,7 +30,7 @@ This directory keeps product decisions, engineering constraints, operations, and
 ## Maintenance rules
 
 - `PRD.md` is the authority for user-visible behavior and roadmap status.
-- Migrations are the authority for the database schema; `0001_initial.sql` is the public baseline and published migrations are immutable.
+- KV key shapes live in `src/kv/keys.ts`; `migrations/0001_initial.sql` is the frozen public SQL baseline and is no longer executed at runtime.
 - Architecture documents describe implemented structure. Design documents explain detailed decisions.
 - README files stay concise and link here instead of duplicating implementation details.
 - Update both language versions when changing bilingual public documentation.

@@ -17,6 +17,11 @@ import {
   resolveIdentifier,
   createIdentifier,
   deleteIdentifier,
+  deleteIdentifiersByModelCard,
+  deleteChannelModelsByModelCard,
+  deleteModelCard,
+  deleteModelCardCascade,
+  updateChannelModelInstance,
   ModelCardRow,
   ChannelModelRow,
   getChannelModelForCardChannel,
@@ -87,7 +92,7 @@ export async function handleModelsCollection(
       const id = generateId();
       let instanceId: string | null = null;
       try {
-        // D1 local has historically hung on batch(), so keep the short sequence
+        // KV has no transaction primitive, so keep the short write sequence
         // explicit and compensate on failure.
         await createModelCard(env.DB, { id, unified_model_id: unifiedModelId, display_name: body.display_name });
         await createIdentifier(env.DB, { identifier: unifiedModelId, identifier_type: 'unified', model_card_id: id, channel_model_id: null });
@@ -120,9 +125,9 @@ export async function handleModelsCollection(
         const card = await getModelCard(env.DB, id);
         return json({ ...card, instances: await listChannelModels(env.DB, id) }, 201);
       } catch (error) {
-        await env.DB.prepare('DELETE FROM model_identifiers WHERE model_card_id = ?').bind(id).run();
-        await env.DB.prepare('DELETE FROM channel_models WHERE model_card_id = ?').bind(id).run();
-        await env.DB.prepare('DELETE FROM model_cards WHERE id = ?').bind(id).run();
+        await deleteIdentifiersByModelCard(env.DB, id);
+        await deleteChannelModelsByModelCard(env.DB, id);
+        await deleteModelCard(env.DB, id);
         throw error;
       }
     } catch (e) {
@@ -167,17 +172,7 @@ export async function handleModelItem(
     // Soft-delete card + instances + identifiers, and FREE the unified_model_id
     // (rename to a deleted:<ts> placeholder) so the same ID can be recreated.
     // Keep a tombstone so historical analytics and request logs retain a stable model identity.
-    const now = Math.floor(Date.now() / 1000);
-    await env.DB.prepare('DELETE FROM model_identifiers WHERE model_card_id = ?').bind(id).run();
-    await env.DB.prepare('UPDATE model_cards SET deleted_at = ?, updated_at = ?, unified_model_id = ? WHERE id = ?')
-      .bind(now, now, `deleted:${id}:${now}`, id)
-      .run();
-    await env.DB.prepare('UPDATE channel_models SET deleted_at = ?, updated_at = ? WHERE model_card_id = ?')
-      .bind(now, now, id)
-      .run();
-    await env.DB.prepare(
-      'UPDATE channel_provider_models SET imported_model_card_id = NULL, updated_at = ? WHERE imported_model_card_id = ?',
-    ).bind(now, id).run();
+    await deleteModelCardCascade(env.DB, id);
     invalidateModelRouteCache();
     return new Response(null, { status: 204 });
   }
@@ -290,34 +285,32 @@ export async function handleModelInstanceItem(
       currency?: string;
       supports_stream_usage?: boolean;
     };
-    const now = Math.floor(Date.now() / 1000);
-    const fields: string[] = ['updated_at = ?'];
-    const values: unknown[] = [now];
+    const updates: {
+      input_price_micros_per_million?: number | null;
+      output_price_micros_per_million?: number | null;
+      cache_input_price_micros_per_million?: number | null;
+      currency?: string;
+      supports_stream_usage?: 0 | 1;
+    } = {};
     if (body.input_price_micros_per_million !== undefined) {
-      fields.push('input_price_micros_per_million = ?');
-      values.push(parseOptionalPrice(body.input_price_micros_per_million));
+      updates.input_price_micros_per_million = parseOptionalPrice(body.input_price_micros_per_million);
     }
     if (body.output_price_micros_per_million !== undefined) {
-      fields.push('output_price_micros_per_million = ?');
-      values.push(parseOptionalPrice(body.output_price_micros_per_million));
+      updates.output_price_micros_per_million = parseOptionalPrice(body.output_price_micros_per_million);
     }
     if (body.cache_input_price_micros_per_million !== undefined) {
-      fields.push('cache_input_price_micros_per_million = ?');
-      values.push(parseOptionalPrice(body.cache_input_price_micros_per_million));
+      updates.cache_input_price_micros_per_million = parseOptionalPrice(body.cache_input_price_micros_per_million);
     }
     if (body.currency !== undefined) {
       if (body.currency !== 'USD' && body.currency !== 'CNY') {
         return gatewayErrorResponse('invalid_request', 'currency must be USD or CNY', requestId);
       }
-      fields.push('currency = ?');
-      values.push(body.currency);
+      updates.currency = body.currency;
     }
     if (body.supports_stream_usage !== undefined) {
-      fields.push('supports_stream_usage = ?');
-      values.push(body.supports_stream_usage ? 1 : 0);
+      updates.supports_stream_usage = body.supports_stream_usage ? 1 : 0;
     }
-    values.push(instanceId);
-    await env.DB.prepare(`UPDATE channel_models SET ${fields.join(', ')} WHERE id = ?`).bind(...values).run();
+    await updateChannelModelInstance(env.DB, instanceId, updates);
 
     const instances = await listChannelModels(env.DB, modelId);
     return json({ ...card, instances });

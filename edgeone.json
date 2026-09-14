@@ -1,0 +1,9 @@
+{
+  "installCommand": "npm install",
+  "buildCommand": "npm run build:dashboard",
+  "outputDirectory": "dashboard/dist",
+  "functions": {
+    "directory": "functions",
+    "routes": ["/health", "/v1/*", "/admin/api/*", "/management/v1/*"]
+  }
+}

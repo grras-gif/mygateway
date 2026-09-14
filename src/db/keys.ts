@@ -1,8 +1,10 @@
 /**
- * Gateway API Key database operations, including virtual-key limits.
+ * Gateway API Key operations, including virtual-key limits (KV-backed).
  */
 
 import type { LimitPeriod } from '../shared/key-limits.ts';
+import { gatewayKeyByHashKey, gatewayKeyKey, KEY_PREFIX } from '../kv/keys.ts';
+import { kvDelete, kvGetJson, kvListJson, kvPutJson } from '../kv/store.ts';
 
 export interface GatewayKeyRow {
   id: string;
@@ -95,17 +97,22 @@ export function serializeModelAllowlist(models: string[] | undefined): string | 
   return JSON.stringify([...new Set(models.map((item) => item.trim()).filter(Boolean))]);
 }
 
-export async function listGatewayKeys(db: D1Database): Promise<GatewayKeyRow[]> {
-  const result = await db
-    .prepare(`SELECT * FROM gateway_api_keys
-      WHERE is_temporary = 0 OR expires_at IS NULL OR expires_at > unixepoch()
-      ORDER BY created_at DESC`)
-    .all<GatewayKeyRow>();
-  return result.results;
+function isVisible(row: GatewayKeyRow, nowSeconds: number): boolean {
+  if (row.is_temporary !== 1) return true;
+  if (row.expires_at === null || row.expires_at === undefined) return true;
+  return row.expires_at > nowSeconds;
+}
+
+export async function listGatewayKeys(db: KVNamespace): Promise<GatewayKeyRow[]> {
+  const now = Math.floor(Date.now() / 1000);
+  const rows = await kvListJson<GatewayKeyRow>(db, KEY_PREFIX.gatewayKey);
+  return rows
+    .filter((row) => isVisible(row, now))
+    .sort((a, b) => b.created_at - a.created_at);
 }
 
 export async function createGatewayKey(
-  db: D1Database,
+  db: KVNamespace,
   key: {
     id: string;
     name: string;
@@ -120,69 +127,102 @@ export async function createGatewayKey(
     is_temporary?: boolean;
   },
 ): Promise<void> {
-  await db
-    .prepare(
-      `INSERT INTO gateway_api_keys
-        (id, name, key_prefix, key_hash, rpm_limit, request_limit, token_limit, limit_period,
-         expires_at, model_allowlist, is_temporary)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      key.id,
-      key.name,
-      key.key_prefix,
-      key.key_hash,
-      key.rpm_limit ?? null,
-      key.request_limit ?? null,
-      key.token_limit ?? null,
-      key.limit_period ?? 'day',
-      key.expires_at ?? null,
-      key.model_allowlist ?? null,
-      key.is_temporary ? 1 : 0,
-    )
-    .run();
+  const now = Math.floor(Date.now() / 1000);
+  const row: GatewayKeyRow = {
+    id: key.id,
+    name: key.name,
+    key_prefix: key.key_prefix,
+    key_hash: key.key_hash,
+    status: 'active',
+    rpm_limit: key.rpm_limit ?? null,
+    request_limit: key.request_limit ?? null,
+    token_limit: key.token_limit ?? null,
+    limit_period: key.limit_period ?? 'day',
+    expires_at: key.expires_at ?? null,
+    model_allowlist: key.model_allowlist ?? null,
+    created_at: now,
+    updated_at: now,
+    revoked_at: null,
+    is_temporary: key.is_temporary ? 1 : 0,
+  };
+  await kvPutJson(db, gatewayKeyKey(key.id), row);
+  await db.put(gatewayKeyByHashKey(key.key_hash), key.id);
 }
 
-export async function getGatewayKey(db: D1Database, id: string): Promise<GatewayKeyRow | null> {
-  return db.prepare('SELECT * FROM gateway_api_keys WHERE id = ? LIMIT 1').bind(id).first<GatewayKeyRow>();
+export async function getGatewayKey(db: KVNamespace, id: string): Promise<GatewayKeyRow | null> {
+  return kvGetJson<GatewayKeyRow>(db, gatewayKeyKey(id));
 }
 
-export async function cleanupExpiredTemporaryGatewayKeys(db: D1Database): Promise<number> {
-  const result = await db.prepare(
-    'DELETE FROM gateway_api_keys WHERE is_temporary = 1 AND expires_at <= unixepoch()',
-  ).run();
-  return result.meta.changes ?? 0;
+export async function cleanupExpiredTemporaryGatewayKeys(db: KVNamespace): Promise<number> {
+  const now = Math.floor(Date.now() / 1000);
+  const rows = await kvListJson<GatewayKeyRow>(db, KEY_PREFIX.gatewayKey);
+  const expired = rows.filter(
+    (row) => row.is_temporary === 1 && row.expires_at !== null && row.expires_at <= now,
+  );
+  for (const row of expired) {
+    await kvDelete(db, gatewayKeyKey(row.id));
+    await kvDelete(db, gatewayKeyByHashKey(row.key_hash));
+  }
+  return expired.length;
 }
 
 /**
  * Lookup an active key by its hash. Used for gateway auth.
  */
 export async function findActiveKeyByHash(
-  db: D1Database,
+  db: KVNamespace,
   keyHash: string,
 ): Promise<Pick<GatewayKeyRow, 'id' | 'name'> | null> {
-  return db
-    .prepare(
-      'SELECT id, name FROM gateway_api_keys WHERE key_hash = ? AND status = ? AND revoked_at IS NULL LIMIT 1',
-    )
-    .bind(keyHash, 'active')
-    .first();
+  const id = await db.get(gatewayKeyByHashKey(keyHash));
+  if (!id) return null;
+  const row = await getGatewayKey(db, id);
+  if (!row || row.status !== 'active' || row.revoked_at !== null) return null;
+  return { id: row.id, name: row.name };
+}
+
+/** Key identity used by the gateway hot path (single hash lookup). */
+export async function getGatewayKeyIdentityByHash(
+  db: KVNamespace,
+  keyHash: string,
+): Promise<GatewayKeyLimits & { id: string; name: string } | null> {
+  const id = await db.get(gatewayKeyByHashKey(keyHash));
+  if (!id) return null;
+  const row = await getGatewayKey(db, id);
+  if (!row || row.status !== 'active' || row.revoked_at !== null) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    rpmLimit: row.rpm_limit ?? null,
+    requestLimit: row.request_limit ?? null,
+    tokenLimit: row.token_limit ?? null,
+    limitPeriod: row.limit_period ?? 'day',
+    expiresAt: row.expires_at ?? null,
+    modelAllowlist: parseModelAllowlist(row.model_allowlist),
+  };
 }
 
 export async function updateGatewayKeyStatus(
-  db: D1Database,
+  db: KVNamespace,
   id: string,
   status: 'active' | 'disabled',
 ): Promise<void> {
-  const now = Math.floor(Date.now() / 1000);
-  await db
-    .prepare('UPDATE gateway_api_keys SET status = ?, updated_at = ? WHERE id = ?')
-    .bind(status, now, id)
-    .run();
+  const row = await getGatewayKey(db, id);
+  if (!row) return;
+  row.status = status;
+  row.updated_at = Math.floor(Date.now() / 1000);
+  await kvPutJson(db, gatewayKeyKey(id), row);
+}
+
+export async function updateGatewayKeyName(db: KVNamespace, id: string, name: string): Promise<void> {
+  const row = await getGatewayKey(db, id);
+  if (!row) return;
+  row.name = name;
+  row.updated_at = Math.floor(Date.now() / 1000);
+  await kvPutJson(db, gatewayKeyKey(id), row);
 }
 
 export async function updateGatewayKeyLimits(
-  db: D1Database,
+  db: KVNamespace,
   id: string,
   limits: {
     rpm_limit?: number | null;
@@ -193,53 +233,34 @@ export async function updateGatewayKeyLimits(
     model_allowlist?: string | null;
   },
 ): Promise<void> {
-  const now = Math.floor(Date.now() / 1000);
-  const fields: string[] = ['updated_at = ?'];
-  const values: unknown[] = [now];
-
-  if (limits.rpm_limit !== undefined) {
-    fields.push('rpm_limit = ?');
-    values.push(limits.rpm_limit);
-  }
-  if (limits.request_limit !== undefined) {
-    fields.push('request_limit = ?');
-    values.push(limits.request_limit);
-  }
-  if (limits.token_limit !== undefined) {
-    fields.push('token_limit = ?');
-    values.push(limits.token_limit);
-  }
-  if (limits.limit_period !== undefined) {
-    fields.push('limit_period = ?');
-    values.push(limits.limit_period);
-  }
-  if (limits.expires_at !== undefined) {
-    fields.push('expires_at = ?');
-    values.push(limits.expires_at);
-  }
-  if (limits.model_allowlist !== undefined) {
-    fields.push('model_allowlist = ?');
-    values.push(limits.model_allowlist);
-  }
-
-  values.push(id);
-  await db
-    .prepare(`UPDATE gateway_api_keys SET ${fields.join(', ')} WHERE id = ?`)
-    .bind(...values)
-    .run();
+  const row = await getGatewayKey(db, id);
+  if (!row) return;
+  if (limits.rpm_limit !== undefined) row.rpm_limit = limits.rpm_limit;
+  if (limits.request_limit !== undefined) row.request_limit = limits.request_limit;
+  if (limits.token_limit !== undefined) row.token_limit = limits.token_limit;
+  if (limits.limit_period !== undefined) row.limit_period = limits.limit_period;
+  if (limits.expires_at !== undefined) row.expires_at = limits.expires_at;
+  if (limits.model_allowlist !== undefined) row.model_allowlist = limits.model_allowlist;
+  row.updated_at = Math.floor(Date.now() / 1000);
+  await kvPutJson(db, gatewayKeyKey(id), row);
 }
 
-export async function revokeGatewayKey(db: D1Database, id: string): Promise<void> {
+export async function revokeGatewayKey(db: KVNamespace, id: string): Promise<void> {
+  const row = await getGatewayKey(db, id);
+  if (!row) return;
   const now = Math.floor(Date.now() / 1000);
-  await db
-    .prepare('UPDATE gateway_api_keys SET revoked_at = ?, status = ?, updated_at = ? WHERE id = ?')
-    .bind(now, 'disabled', now, id)
-    .run();
+  row.revoked_at = now;
+  row.status = 'disabled';
+  row.updated_at = now;
+  await kvPutJson(db, gatewayKeyKey(id), row);
 }
 
 /**
  * Hard-delete a gateway key. Used for admin DELETE.
  */
-export async function deleteGatewayKey(db: D1Database, id: string): Promise<void> {
-  await db.prepare('DELETE FROM gateway_api_keys WHERE id = ?').bind(id).run();
+export async function deleteGatewayKey(db: KVNamespace, id: string): Promise<void> {
+  const row = await getGatewayKey(db, id);
+  if (!row) return;
+  await kvDelete(db, gatewayKeyKey(id));
+  await kvDelete(db, gatewayKeyByHashKey(row.key_hash));
 }

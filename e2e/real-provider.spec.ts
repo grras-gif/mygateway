@@ -1,7 +1,7 @@
 /**
  * E2E: real DeepSeek integration — proves the gateway actually talks to a live provider.
  *
- * Uses the real provider key from .dev.vars (DEEPSEEK_TEST_KEY).
+ * Uses the real provider key from .env (DEEPSEEK_TEST_KEY).
  * Skipped when the key is missing (e.g. CI without secrets).
  *
  * Flow:
@@ -17,9 +17,9 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { devVar, loginViaApi, loginViaUi, resetState, uniq } from './helpers';
+import { envVar, loginViaApi, loginViaUi, resetState, uniq } from './helpers';
 
-const providerKey = devVar('DEEPSEEK_TEST_KEY');
+const providerKey = envVar('DEEPSEEK_TEST_KEY');
 const sitRequested = process.env.RUN_SIT === '1';
 
 if (sitRequested && !providerKey) {

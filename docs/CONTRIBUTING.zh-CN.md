@@ -2,11 +2,11 @@
 
 [English](CONTRIBUTING.md) · [简体中文](CONTRIBUTING.zh-CN.md)
 
-感谢你关注 MyGateway。项目刻意保持轻量：优先适配 Cloudflare 免费额度，使用 D1 与 isolate 内存，并把“容易部署、容易理解”放在企业级功能数量之前。
+感谢你关注 MyGateway。项目刻意保持轻量：优先适配 EdgeOne Makers 免费额度，使用单个 KV 命名空间与 isolate 内存，并把“容易部署、容易理解”放在企业级功能数量之前。
 
 ## 项目原则
 
-- **免费额度优先**：除非产品规划明确批准，不引入自托管服务、KV、R2、Queues 或 Durable Objects。
+- **免费额度优先**：除非产品规划明确批准，不引入自托管服务、R2、Queues、Durable Objects 或额外的 KV 命名空间。
 - **简单且可预期**：采用固定优先级路由、响应前 Fallback，不进行隐藏的后台探测。
 - **易于使用**：一套调用密钥和一个控制台，默认配置可以直接工作；对话上下文默认不保存。
 - **数据口径诚实**：Token 和费用来自供应商上报；缺失时标记未知，不在网关内猜测。
@@ -14,19 +14,20 @@
 ## 环境准备
 
 ```bash
-npm run local            # 安装、初始化、构建、迁移并在 http://localhost:8787 启动
+npm install
+cp .env.example .env     # 设置 INITIAL_ADMIN_PASSWORD 和本地 MASTER_KEY
+npm run dev              # 控制台开发服务器 http://localhost:5173
 ```
 
 首次运行使用 [README](../README.zh-CN.md) 中的初始管理员凭据，登录后应立即修改。
 
-完成首次初始化后，追求更快的手工开发循环时可以分别执行 `npm run build:dashboard`、
-`npm run dev:setup` 和 `npm run dev`；单命令入口复用的也是这些项目脚本。
+网关后端运行在边缘函数运行时中。要端到端验证 `/v1/*`、`/admin/api/*` 和 `/management/v1/*`，
+请为你的 EdgeOne Makers 项目创建预览部署并让控制台指向它。
 
 ## 开发与验证
 
 ```bash
-npm run test:fast          # 文档、类型、单测、Dashboard 和 Worker dry-run
-npm run test:e2e:serve     # 在另一个终端启动本地 D1 与 Worker
+npm run test:fast          # 文档、类型、单测、Dashboard 构建和部署配置
 npm run test:api           # Admin 与 Management HTTP 契约
 npm run test:ui            # 浏览器用户旅程
 npm run test:system        # 可控上游路由与流式行为
@@ -38,17 +39,19 @@ npm run test:sit           # 显式运行真实集成，会产生 Provider 用�
 1. `npm run test:fast` 通过。
 2. 按测试活动矩阵运行所有受影响层，并为新增行为补充测试。
 3. 发布维护者运行 `npm run test:release`；没有 SIT 凭据的贡献者运行 `test:release:local`。
-4. Schema 变更使用 `migrations/` 中新的连续编号 migration。
+4. KV 键结构统一在 `src/kv/keys.ts` 定义；KV 无 Schema，不存在 SQL migration。
 5. 用户可见行为同步到 `docs/PRD.md`；实现细节只写入对应架构或设计文档，不在多个文件复制同一段内容。
 
 ## 目录说明
 
 | 路径 | 用途 |
 |---|---|
+| `functions/` | 边缘函数入口（catch-all 路由与静态资源回落） |
 | `src/gateway/` | `/v1/*` 数据面：鉴权、路由、Fallback、配额和缓存 |
 | `src/admin/` | `/admin/api/*` 管理控制面 |
-| `src/db/` | D1 查询与写入 |
-| `migrations/` | 按顺序执行的 D1 Schema migrations |
+| `src/db/` | 基于 KV 的领域数据访问 |
+| `src/kv/` | 键前缀定义与 JSON / 分页辅助 |
+| `migrations/` | 历史 SQL 基线（只读参考，运行时不执行） |
 | `dashboard/` | SolidJS 管理控制台 |
 | `test/` | Vitest 单元测试 |
 | `e2e/` | Playwright UI、API、可控上游与真实供应商测试 |

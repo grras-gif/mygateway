@@ -1,7 +1,10 @@
 /**
- * Global model price baseline (model_prices) — editable, used to prefill
+ * Global model price baseline (KV-backed) — editable, used to prefill
  * channel-instance prices when a model is imported.
  */
+
+import { modelPriceKey, KEY_PREFIX } from '../kv/keys.ts';
+import { kvDelete, kvGetJson, kvListJson, kvPutJson } from '../kv/store.ts';
 
 export interface ModelPriceRow {
   provider_model_id: string;
@@ -16,29 +19,27 @@ export interface ModelPriceRow {
 
 /** Look up baseline prices for a batch of provider model ids. */
 export async function getModelPrices(
-  db: D1Database,
+  db: KVNamespace,
   providerModelIds: string[],
 ): Promise<Map<string, ModelPriceRow>> {
   const map = new Map<string, ModelPriceRow>();
-  if (providerModelIds.length === 0) return map;
-  const placeholders = providerModelIds.map(() => '?').join(', ');
-  const result = await db
-    .prepare(`SELECT * FROM model_prices WHERE provider_model_id IN (${placeholders})`)
-    .bind(...providerModelIds)
-    .all<ModelPriceRow>();
-  for (const row of result.results) map.set(row.provider_model_id, row);
+  for (const id of providerModelIds) {
+    if (!id || map.has(id)) continue;
+    const row = await kvGetJson<ModelPriceRow>(db, modelPriceKey(id));
+    if (row) map.set(id, row);
+  }
   return map;
 }
 
-export async function listModelPrices(db: D1Database): Promise<ModelPriceRow[]> {
-  const result = await db
-    .prepare('SELECT * FROM model_prices ORDER BY provider ASC, provider_model_id ASC')
-    .all<ModelPriceRow>();
-  return result.results;
+export async function listModelPrices(db: KVNamespace): Promise<ModelPriceRow[]> {
+  const rows = await kvListJson<ModelPriceRow>(db, KEY_PREFIX.modelPrice);
+  return rows.sort((a, b) =>
+    a.provider.localeCompare(b.provider) || a.provider_model_id.localeCompare(b.provider_model_id),
+  );
 }
 
 export async function upsertModelPrice(
-  db: D1Database,
+  db: KVNamespace,
   entry: {
     provider_model_id: string;
     display_name: string;
@@ -49,36 +50,12 @@ export async function upsertModelPrice(
     currency: string;
   },
 ): Promise<void> {
-  const now = Math.floor(Date.now() / 1000);
-  await db
-    .prepare(
-      `INSERT INTO model_prices (
-        provider_model_id, display_name, provider,
-        input_price_micros_per_million, output_price_micros_per_million,
-        cache_input_price_micros_per_million, currency, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(provider_model_id) DO UPDATE SET
-        display_name = excluded.display_name,
-        provider = excluded.provider,
-        input_price_micros_per_million = excluded.input_price_micros_per_million,
-        output_price_micros_per_million = excluded.output_price_micros_per_million,
-        cache_input_price_micros_per_million = excluded.cache_input_price_micros_per_million,
-        currency = excluded.currency,
-        updated_at = excluded.updated_at`,
-    )
-    .bind(
-      entry.provider_model_id,
-      entry.display_name,
-      entry.provider,
-      entry.input_price_micros_per_million,
-      entry.output_price_micros_per_million,
-      entry.cache_input_price_micros_per_million,
-      entry.currency,
-      now,
-    )
-    .run();
+  await kvPutJson(db, modelPriceKey(entry.provider_model_id), {
+    ...entry,
+    updated_at: Math.floor(Date.now() / 1000),
+  });
 }
 
-export async function deleteModelPrice(db: D1Database, providerModelId: string): Promise<void> {
-  await db.prepare('DELETE FROM model_prices WHERE provider_model_id = ?').bind(providerModelId).run();
+export async function deleteModelPrice(db: KVNamespace, providerModelId: string): Promise<void> {
+  await kvDelete(db, modelPriceKey(providerModelId));
 }

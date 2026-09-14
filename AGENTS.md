@@ -14,8 +14,9 @@
 
 ## 不可破坏的产品约束
 
-- 默认部署保持 Cloudflare Free Tier 友好：Worker + Static Assets + D1 + Secrets + 单个 Cron。
-- 不新增 KV、R2、Queues、Durable Objects 或外部服务，除非 PRD 已明确批准。
+- 默认部署保持 EdgeOne Makers 免费额度友好：一个项目（静态资源 + 边缘函数）+ 一个 KV 命名空间
+  + 环境变量，不使用定时任务。
+- 不新增额外的 KV 命名空间、R2、Queues、Durable Objects 或外部服务，除非 PRD 已明确批准。
 - 路由保持固定优先级和原生协议优先；只能在向客户端提交响应前 Fallback。
 - Chat / Messages 只转换已覆盖的公共子集；无法无损转换时明确报错。
 - Provider Key 不得明文落库或日志；Gateway Key 只存哈希并仅展示一次。
@@ -26,14 +27,18 @@
 ## 代码地图
 
 - `src/gateway/`：数据面、鉴权 / 路由、配额、Fallback、协议转换和 usage finalizer。
-- `src/admin/`：管理 API；`src/db/`：D1 查询；`src/shared/`：前后端共享的供应商预制等。
-- `dashboard/src/`：SolidJS 控制台；`migrations/`：数据库 Schema 的唯一权威来源。
+- `src/admin/`：管理 API；`src/db/`：基于 KV 的领域数据访问；`src/kv/`：键前缀与 JSON / 分页辅助；
+  `src/shared/`：前后端共享的供应商预制等。
+- `functions/[[default]].ts`：边缘函数入口（后端路由 + 静态资源回落）；`src/maintenance/`：按需保留期清理。
+- `dashboard/src/`：SolidJS 控制台；`edgeone.json`：EdgeOne Makers 构建配置。
 - `test/`：Vitest；`e2e/`：Playwright；`scripts/mock-provider.mjs`：无真实 Key 的本地上游。
 
 ## 修改规则
 
-- `migrations/0001_initial.sql` 是首个公开版本的不可变基线。对外发布后的 Schema 变更只能新增
-  下一个编号 migration，任何已发布 migration 都不得重写。
+- KV 是 schema-less 存储：键前缀和键构造只能在 `src/kv/keys.ts` 维护，不要在领域模块里拼字符串。
+  唯一性约束用二级索引键（如 `gateway_key_hash:<hash>`）实现，不要退化为全量 `list` 扫描热路径。
+- `migrations/0001_initial.sql` 是首个公开版本的不可变历史基线，运行时不执行；运行时初始数据由
+  `src/db/bootstrap.ts` 幂等写入，新增基线数据只能追加到该文件并保持幂等。
 - Provider 预制只在 `src/shared/provider-presets.ts` 维护；不要在 Dashboard 复制一份。
 - 新增用户可见行为时同步更新 PRD；实现细节同步到架构或详细设计；不要在多个文档重复整段内容。
 - 保留稳定错误码、Request ID、Secret 脱敏和客户端取消传播。

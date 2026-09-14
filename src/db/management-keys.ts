@@ -1,3 +1,6 @@
+import { managementAuditKey, managementKeyByHashKey, managementKeyKey, KEY_PREFIX } from '../kv/keys.ts';
+import { kvDelete, kvGetJson, kvListJson, kvPutJson } from '../kv/store.ts';
+
 export type ManagementPermission = 'read' | 'write';
 export const PERMANENT_MANAGEMENT_KEY_EXPIRY = 253_402_300_799;
 
@@ -27,15 +30,16 @@ export function toPublicManagementKey(row: ManagementKeyRow): ManagementKeyPubli
   };
 }
 
-export async function listManagementKeys(db: D1Database): Promise<ManagementKeyRow[]> {
-  return (await db.prepare('SELECT * FROM management_keys ORDER BY created_at DESC').all<ManagementKeyRow>()).results;
+export async function listManagementKeys(db: KVNamespace): Promise<ManagementKeyRow[]> {
+  const rows = await kvListJson<ManagementKeyRow>(db, KEY_PREFIX.managementKey);
+  return rows.sort((a, b) => b.created_at - a.created_at);
 }
 
-export async function getManagementKey(db: D1Database, id: string): Promise<ManagementKeyRow | null> {
-  return db.prepare('SELECT * FROM management_keys WHERE id = ? LIMIT 1').bind(id).first<ManagementKeyRow>();
+export async function getManagementKey(db: KVNamespace, id: string): Promise<ManagementKeyRow | null> {
+  return kvGetJson<ManagementKeyRow>(db, managementKeyKey(id));
 }
 
-export async function createManagementKey(db: D1Database, key: {
+export async function createManagementKey(db: KVNamespace, key: {
   id: string;
   name: string;
   keyPrefix: string;
@@ -43,44 +47,60 @@ export async function createManagementKey(db: D1Database, key: {
   permission: ManagementPermission;
   expiresAt: number;
 }): Promise<void> {
-  await db.prepare(
-    `INSERT INTO management_keys (id, name, key_prefix, key_hash, permission, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).bind(key.id, key.name, key.keyPrefix, key.keyHash, key.permission, key.expiresAt).run();
+  const now = Math.floor(Date.now() / 1000);
+  const row: ManagementKeyRow = {
+    id: key.id,
+    name: key.name,
+    key_prefix: key.keyPrefix,
+    key_hash: key.keyHash,
+    permission: key.permission,
+    status: 'active',
+    expires_at: key.expiresAt,
+    last_used_at: null,
+    created_at: now,
+    updated_at: now,
+    revoked_at: null,
+  };
+  await kvPutJson(db, managementKeyKey(key.id), row);
+  await db.put(managementKeyByHashKey(key.keyHash), key.id);
 }
 
 export async function findActiveManagementKeyByHash(
-  db: D1Database,
+  db: KVNamespace,
   keyHash: string,
 ): Promise<ManagementKeyRow | null> {
-  return db.prepare(
-    `SELECT * FROM management_keys
-     WHERE key_hash = ? AND status = 'active' AND revoked_at IS NULL AND expires_at > unixepoch()
-     LIMIT 1`,
-  ).bind(keyHash).first<ManagementKeyRow>();
+  const id = await db.get(managementKeyByHashKey(keyHash));
+  if (!id) return null;
+  const row = await getManagementKey(db, id);
+  if (!row) return null;
+  const now = Math.floor(Date.now() / 1000);
+  if (row.status !== 'active' || row.revoked_at !== null || row.expires_at <= now) return null;
+  return row;
 }
 
-export async function updateManagementKey(db: D1Database, id: string, update: {
+export async function updateManagementKey(db: KVNamespace, id: string, update: {
   name?: string;
   permission?: ManagementPermission;
   status?: 'active' | 'disabled';
   expiresAt?: number;
 }): Promise<void> {
-  const fields = ['updated_at = unixepoch()'];
-  const values: unknown[] = [];
-  if (update.name !== undefined) { fields.push('name = ?'); values.push(update.name); }
-  if (update.permission !== undefined) { fields.push('permission = ?'); values.push(update.permission); }
-  if (update.status !== undefined) { fields.push('status = ?'); values.push(update.status); }
-  if (update.expiresAt !== undefined) { fields.push('expires_at = ?'); values.push(update.expiresAt); }
-  values.push(id);
-  await db.prepare(`UPDATE management_keys SET ${fields.join(', ')} WHERE id = ?`).bind(...values).run();
+  const row = await getManagementKey(db, id);
+  if (!row) return;
+  if (update.name !== undefined) row.name = update.name;
+  if (update.permission !== undefined) row.permission = update.permission;
+  if (update.status !== undefined) row.status = update.status;
+  if (update.expiresAt !== undefined) row.expires_at = update.expiresAt;
+  row.updated_at = Math.floor(Date.now() / 1000);
+  await kvPutJson(db, managementKeyKey(id), row);
 }
 
-export async function deleteManagementKey(db: D1Database, id: string): Promise<void> {
-  await db.prepare('DELETE FROM management_keys WHERE id = ?').bind(id).run();
+export async function deleteManagementKey(db: KVNamespace, id: string): Promise<void> {
+  const row = await getManagementKey(db, id);
+  if (row) await kvDelete(db, managementKeyByHashKey(row.key_hash));
+  await kvDelete(db, managementKeyKey(id));
 }
 
-export async function recordManagementAudit(db: D1Database, entry: {
+export async function recordManagementAudit(db: KVNamespace, entry: {
   id: string;
   keyId: string;
   method: string;
@@ -88,22 +108,28 @@ export async function recordManagementAudit(db: D1Database, entry: {
   status: number;
   requestId: string;
 }): Promise<void> {
-  await db.batch([
-    db.prepare(
-      `INSERT INTO management_audit_logs
-       (id, management_key_id, method, path, status, request_id)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).bind(entry.id, entry.keyId, entry.method, entry.path, entry.status, entry.requestId),
-    db.prepare(
-      `UPDATE management_keys SET last_used_at = unixepoch()
-       WHERE id = ? AND (last_used_at IS NULL OR last_used_at < unixepoch() - 300)`,
-    ).bind(entry.keyId),
-  ]);
+  const now = Math.floor(Date.now() / 1000);
+  await kvPutJson(db, managementAuditKey(entry.id), {
+    id: entry.id,
+    management_key_id: entry.keyId,
+    method: entry.method,
+    path: entry.path,
+    status: entry.status,
+    request_id: entry.requestId,
+    created_at: now,
+  });
+
+  const key = await getManagementKey(db, entry.keyId);
+  if (key && (key.last_used_at === null || key.last_used_at < now - 300)) {
+    key.last_used_at = now;
+    await kvPutJson(db, managementKeyKey(entry.keyId), key);
+  }
 }
 
-export async function cleanupManagementAudit(db: D1Database, retentionDays: number): Promise<number> {
-  const result = await db.prepare(
-    'DELETE FROM management_audit_logs WHERE created_at < unixepoch() - ? * 86400',
-  ).bind(retentionDays).run();
-  return result.meta.changes ?? 0;
+export async function cleanupManagementAudit(db: KVNamespace, retentionDays: number): Promise<number> {
+  const cutoff = Math.floor(Date.now() / 1000) - retentionDays * 86_400;
+  const rows = await kvListJson<{ id: string; created_at: number }>(db, KEY_PREFIX.managementAudit);
+  const expired = rows.filter((row) => row.created_at < cutoff);
+  await Promise.all(expired.map((row) => kvDelete(db, managementAuditKey(row.id))));
+  return expired.length;
 }

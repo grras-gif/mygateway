@@ -100,7 +100,7 @@ gatewayApp.doc31('/v1/openapi.json', {
     title: 'MyGateway API',
     version: '0.1.0',
     description:
-      'Cloudflare AI Aggregation Gateway — OpenAI-compatible unified model access with fixed-priority routing and pre-response fallback.',
+      'EdgeOne Makers AI Aggregation Gateway — OpenAI-compatible unified model access with fixed-priority routing and pre-response fallback.',
   },
   servers: [{ url: '/' }],
 });

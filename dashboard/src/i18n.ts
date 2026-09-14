@@ -497,7 +497,7 @@ const dict: Record<string, Entry> = {
   'system.accountBody': { zh: '当前登录用户', en: 'Signed in as' },
   'system.changeCredentials': { zh: '修改用户名与密码', en: 'Change credentials' },
   'system.securityBody': { zh: 'MASTER_KEY 是系统自动生成的内部密钥，用于加密 Provider Key 和敏感日志上下文。日常无需管理，请勿删除或轮换；变更后已有加密数据将无法读取。', en: 'MASTER_KEY is an automatically generated internal secret that encrypts provider credentials and sensitive log context. It needs no routine management. Deleting or rotating it makes existing encrypted data unreadable.' },
-  'system.deploymentNote': { zh: '生产环境由 Cloudflare 托管。域名、运行时变量和部署记录请在对应 Worker 中管理。', en: 'Production runs on Cloudflare. Manage domains, runtime variables, and deployment history from the corresponding Worker.' },
+  'system.deploymentNote': { zh: '生产环境由 EdgeOne Makers 托管。域名、运行时变量和部署记录请在对应的 EdgeOne Makers 项目中管理。', en: 'Production runs on EdgeOne Makers. Manage domains, runtime variables, and deployment history from the corresponding EdgeOne Makers project.' },
   'system.version': { zh: '版本', en: 'Version' },
   'system.eyebrowAccount': { zh: '账号', en: 'Account' },
   'system.eyebrowAbout': { zh: '关于', en: 'About' },
