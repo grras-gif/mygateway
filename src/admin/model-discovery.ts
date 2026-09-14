@@ -41,6 +41,7 @@ const DISCOVERY_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_MODELS = 500;
 const MAX_PAGES = 5;
+const MAX_ERROR_BODY_CHARS = 120;
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
@@ -91,6 +92,24 @@ async function readResponseText(response: Response): Promise<string> {
   let offset = 0;
   for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
   return new TextDecoder().decode(output);
+}
+
+/** Collapse whitespace and truncate a response body so it stays safe for error messages. */
+function truncateBodyForError(text: string): string {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  return collapsed.length > MAX_ERROR_BODY_CHARS ? `${collapsed.slice(0, MAX_ERROR_BODY_CHARS)}…` : collapsed;
+}
+
+/**
+ * Build a compact diagnostic suffix for discovery failures: HTTP status, response
+ * Content-Type (or `unknown`), the requested URL, and optionally the already-read body.
+ * Callers must reuse the body string from `readResponseText`; never read it again.
+ */
+function discoveryDiagnostics(response: Response, url: URL, body?: string): string {
+  const contentType = response.headers.get('content-type')?.trim() || 'unknown';
+  const parts = [`HTTP ${response.status}`, `Content-Type ${contentType}`, `URL ${url.toString()}`];
+  if (body !== undefined) parts.push(`body ${truncateBodyForError(body)}`);
+  return parts.join(', ');
 }
 
 export function parseProviderModelList(payload: unknown): {
@@ -165,11 +184,20 @@ export async function discoverProviderModels(
       headers.set('Authorization', `Bearer ${providerKey}`);
     }
     const response = await fetchWithTimeout(url, { headers }, DISCOVERY_TIMEOUT_MS);
-    if (!response.ok) throw new Error(`Provider model discovery returned HTTP ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Provider model discovery returned HTTP ${response.status} (URL ${url.toString()})`);
+    }
+    // readResponseText can only be consumed once; reuse the string for diagnostics.
+    const text = await readResponseText(response);
+    if (!text.trim()) {
+      throw new Error(`Provider model list response is empty (${discoveryDiagnostics(response, url)})`);
+    }
     let payload: unknown;
-    try { payload = JSON.parse(await readResponseText(response)); }
+    try { payload = JSON.parse(text); }
     catch (error) {
-      if (error instanceof SyntaxError) throw new Error('Provider model list is not valid JSON');
+      if (error instanceof SyntaxError) {
+        throw new Error(`Provider model list is not valid JSON (${discoveryDiagnostics(response, url, text)})`);
+      }
       throw error;
     }
     const parsed = parseProviderModelList(payload);
