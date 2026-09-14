@@ -35,6 +35,7 @@ import {
 import { invalidateModelRouteCache } from '../gateway/access-resolver.ts';
 import { getModelPrices } from '../db/model-prices.ts';
 import type { ChannelProtocol } from '../gateway/protocols.ts';
+import { fetchWithTimeout } from '../http/abort.ts';
 
 const DISCOVERY_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -163,7 +164,7 @@ export async function discoverProviderModels(
     } else {
       headers.set('Authorization', `Bearer ${providerKey}`);
     }
-    const response = await fetch(url, { headers, signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS) });
+    const response = await fetchWithTimeout(url, { headers }, DISCOVERY_TIMEOUT_MS);
     if (!response.ok) throw new Error(`Provider model discovery returned HTTP ${response.status}`);
     let payload: unknown;
     try { payload = JSON.parse(await readResponseText(response)); }

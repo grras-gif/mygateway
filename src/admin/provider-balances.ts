@@ -3,6 +3,7 @@
 import type { Env } from '../env.ts';
 import { decryptProviderKey } from '../crypto/provider-key.ts';
 import { getChannel, listChannels, type ChannelWithProtocols } from '../db/channels.ts';
+import { createTimeoutSignal } from '../http/abort.ts';
 
 const DEEPSEEK_BALANCE_URL = 'https://api.deepseek.com/user/balance';
 const BALANCE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -122,15 +123,21 @@ export async function fetchDeepSeekBalance(
   providerApiKey: string,
   fetcher: typeof fetch = fetch,
 ): Promise<DeepSeekBalance> {
-  const response = await fetcher(DEEPSEEK_BALANCE_URL, {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${providerApiKey}`,
-      'User-Agent': 'mygateway/0.1.0',
-    },
-    signal: AbortSignal.timeout(10_000),
-  });
+  const { signal, clear } = createTimeoutSignal(10_000);
+  let response: Response;
+  try {
+    response = await fetcher(DEEPSEEK_BALANCE_URL, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${providerApiKey}`,
+        'User-Agent': 'mygateway/0.1.0',
+      },
+      signal,
+    });
+  } finally {
+    clear();
+  }
   if (!response.ok) {
     throw new Error(`DeepSeek balance request failed (HTTP ${response.status})`);
   }

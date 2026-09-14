@@ -4,6 +4,7 @@
 
 import { Env } from '../env.ts';
 import { gatewayErrorResponse } from '../http/errors.ts';
+import { fetchWithTimeout } from '../http/abort.ts';
 import { generateId, nowSeconds } from '../shared/ids.ts';
 import {
   listChannels,
@@ -472,11 +473,7 @@ export async function handleChannelTest(
     } else {
       headers.set('Authorization', `Bearer ${providerKey}`);
     }
-    const resp = await fetch(testUrl, {
-      method: 'GET',
-      headers,
-      signal: AbortSignal.timeout(10_000),
-    });
+    const resp = await fetchWithTimeout(testUrl, { method: 'GET', headers }, 10_000);
 
     const elapsed = Date.now() - start;
 
