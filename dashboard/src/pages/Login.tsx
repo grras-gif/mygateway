@@ -25,7 +25,9 @@ export default function Login() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: username(), password: password() }),
       });
-      const data = await response.json();
+      const text = await response.text();
+      let data: any = {};
+      try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
       if (!response.ok) throw new Error(data.error?.message ?? t('auth.loginFailed'));
       await auth.check();
       navigate(data.must_change_password ? '/change-password' : '/', { replace: true });

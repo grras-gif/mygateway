@@ -40,25 +40,37 @@ function toExecutionContext(context: EdgeOneContext): ExecutionContext {
 export async function onRequest(context: EdgeOneContext): Promise<Response> {
   const { request } = context;
 
-  // The runtime no longer injects a storage binding into `context.env`; wire the
-  // BlobStore adapter (official @edgeone/pages-blob SDK) into the `DB` slot the
-  // business router expects.
-  const env: Env = { ...context.env, DB: getBlobStore() };
+  let response: Response | undefined;
+  try {
+    // The runtime no longer injects a storage binding into `context.env`; wire the
+    // BlobStore adapter (official @edgeone/pages-blob SDK) into the `DB` slot the
+    // business router expects.
+    const env: Env = { ...context.env, DB: getBlobStore() };
 
-  // Idempotent baseline seed (settings + model prices). Best-effort: a failure
-  // only records `kv_seed_failed` and never affects the returned response.
-  const seed = ensureBootstrapData(env.DB).catch((error: unknown) => {
-    console.error('kv_seed_failed', {
+    // Idempotent baseline seed (settings + model prices). Best-effort: a failure
+    // only records `kv_seed_failed` and never affects the returned response.
+    const seed = ensureBootstrapData(env.DB).catch((error: unknown) => {
+      console.error('kv_seed_failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    if (typeof context.waitUntil === 'function') {
+      context.waitUntil(seed);
+    } else {
+      await seed;
+    }
+
+    response = await handleRequest(request, env, toExecutionContext(context));
+  } catch (error) {
+    // Never let an exception escape as the platform's plain-text 545.
+    console.error('unhandled_request_error', {
       error: error instanceof Error ? error.message : String(error),
     });
-  });
-  if (typeof context.waitUntil === 'function') {
-    context.waitUntil(seed);
-  } else {
-    await seed;
+    return new Response(JSON.stringify({ error: { message: 'Internal server error', type: 'internal_error' } }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
-
-  const response = await handleRequest(request, env, toExecutionContext(context));
   if (response) return response;
 
   // Not a backend route → let the platform serve static assets.

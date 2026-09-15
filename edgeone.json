@@ -5,5 +5,8 @@
   "functions": {
     "directory": "functions",
     "routes": ["/health", "/v1/*", "/admin/api/*", "/management/v1/*"]
-  }
+  },
+  "rewrites": [
+    { "source": "/*", "destination": "/index.html" }
+  ]
 }

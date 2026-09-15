@@ -67,7 +67,16 @@ export async function handleAdminApi(
   }
 
   // --- Session required for everything else ---
-  const session = await validateAdminSession(request, env.DB, env.MASTER_KEY);
+  let session: Awaited<ReturnType<typeof validateAdminSession>>;
+  try {
+    session = await validateAdminSession(request, env.DB, env.MASTER_KEY);
+  } catch (error) {
+    console.error('admin_session_check_failed', {
+      request_id: requestId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return json({ error: { message: 'Admin session check failed', type: 'admin_error' } }, 500);
+  }
   if (!session) {
     logAuthFailed(requestId, 'invalid_or_missing_session');
     return gatewayErrorResponse('invalid_api_key', 'Admin session required', requestId);

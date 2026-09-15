@@ -35,13 +35,13 @@ import {
 import { invalidateModelRouteCache } from '../gateway/access-resolver.ts';
 import { getModelPrices } from '../db/model-prices.ts';
 import type { ChannelProtocol } from '../gateway/protocols.ts';
-import { fetchWithTimeout } from '../http/abort.ts';
+import { createTimeoutSignal, isTimeoutError } from '../http/abort.ts';
 
 const DISCOVERY_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_MODELS = 500;
 const MAX_PAGES = 5;
-const MAX_ERROR_BODY_CHARS = 120;
+const MAX_ERROR_BODY_CHARS = 300;
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
@@ -71,10 +71,10 @@ function discoveryProtocol(channel: ProviderDiscoveryTarget, presetId: string | 
   return channel.protocols.find((protocol) => protocol.protocol === adapter.protocol) ?? channel.protocols[0];
 }
 
-async function readResponseText(response: Response): Promise<string> {
+async function readResponseBytes(response: Response): Promise<Uint8Array> {
   const length = Number(response.headers.get('content-length') ?? 0);
   if (length > MAX_RESPONSE_BYTES) throw new Error('Model list response is too large');
-  if (!response.body) return '';
+  if (!response.body) return new Uint8Array();
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -91,7 +91,30 @@ async function readResponseText(response: Response): Promise<string> {
   const output = new Uint8Array(total);
   let offset = 0;
   for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
-  return new TextDecoder().decode(output);
+  return output;
+}
+
+/** Decode a response body to text, undoing gzip/deflate/brotli if the runtime left it compressed. */
+async function decodeBodyText(response: Response, bytes: Uint8Array): Promise<string> {
+  const encoding = (response.headers.get('content-encoding') ?? '').trim().toLowerCase();
+  const formats: Record<string, string> = { gzip: 'gzip', 'x-gzip': 'gzip', deflate: 'deflate', br: 'brotli' };
+  const format = formats[encoding];
+  const Decompressor = (globalThis as { DecompressionStream?: new (format: string) => TransformStream<Uint8Array, Uint8Array> }).DecompressionStream;
+  if (!format || typeof Decompressor !== 'function') return new TextDecoder().decode(bytes);
+  try {
+    // Cast: the runtime accepts a Uint8Array body, but the bundled lib.dom types
+    // reject `Uint8Array<ArrayBufferLike>` in `BodyInit`.
+    const body = new Response(bytes as unknown as BodyInit).body;
+    if (!body) return new TextDecoder().decode(bytes);
+    return await new Response(body.pipeThrough(new Decompressor(format))).text();
+  } catch {
+    return new TextDecoder().decode(bytes);
+  }
+}
+
+/** Short hex dump, used when a body looks binary so the excerpt stays diagnosable. */
+function hexPreview(bytes: Uint8Array, limit = 32): string {
+  return [...bytes.slice(0, limit)].map((b) => b.toString(16).padStart(2, '0')).join(' ');
 }
 
 /** Collapse whitespace and truncate a response body so it stays safe for error messages. */
@@ -102,13 +125,23 @@ function truncateBodyForError(text: string): string {
 
 /**
  * Build a compact diagnostic suffix for discovery failures: HTTP status, response
- * Content-Type (or `unknown`), the requested URL, and optionally the already-read body.
- * Callers must reuse the body string from `readResponseText`; never read it again.
+ * Content-Type (or `unknown`), the requested URL, and optionally the already-read
+ * body plus a hex excerpt when the decoded body looks binary.
+ * Callers must reuse the body string from `decodeBodyText`; never read it again.
  */
-function discoveryDiagnostics(response: Response, url: URL, body?: string): string {
+function discoveryDiagnostics(response: Response, url: URL, body?: string, bytes?: Uint8Array): string {
   const contentType = response.headers.get('content-type')?.trim() || 'unknown';
-  const parts = [`HTTP ${response.status}`, `Content-Type ${contentType}`, `URL ${url.toString()}`];
+  const contentEncoding = response.headers.get('content-encoding')?.trim() || 'none';
+  const parts = [
+    `HTTP ${response.status}`,
+    `Content-Type ${contentType}`,
+    `Content-Encoding ${contentEncoding}`,
+    `URL ${url.toString()}`,
+  ];
   if (body !== undefined) parts.push(`body ${truncateBodyForError(body)}`);
+  if (bytes !== undefined && body !== undefined && /[\u0000-\u001F\uFFFD]/.test(body)) {
+    parts.push(`hex ${hexPreview(bytes)}`);
+  }
   return parts.join(', ');
 }
 
@@ -183,22 +216,30 @@ export async function discoverProviderModels(
     } else {
       headers.set('Authorization', `Bearer ${providerKey}`);
     }
-    const response = await fetchWithTimeout(url, { headers }, DISCOVERY_TIMEOUT_MS);
-    if (!response.ok) {
-      throw new Error(`Provider model discovery returned HTTP ${response.status} (URL ${url.toString()})`);
-    }
-    // readResponseText can only be consumed once; reuse the string for diagnostics.
-    const text = await readResponseText(response);
-    if (!text.trim()) {
-      throw new Error(`Provider model list response is empty (${discoveryDiagnostics(response, url)})`);
-    }
+    // Best-effort: ask upstream not to compress so diagnostics stay readable.
+    try { headers.set('Accept-Encoding', 'identity'); } catch { /* header may be forbidden by the runtime; the decode fallback covers it */ }
+    // Keep the timeout alive across the body read; `fetchWithTimeout` only covers headers.
+    const { signal, clear } = createTimeoutSignal(DISCOVERY_TIMEOUT_MS);
     let payload: unknown;
-    try { payload = JSON.parse(text); }
-    catch (error) {
-      if (error instanceof SyntaxError) {
-        throw new Error(`Provider model list is not valid JSON (${discoveryDiagnostics(response, url, text)})`);
+    try {
+      const response = await fetch(url, { headers, signal });
+      if (!response.ok) {
+        throw new Error(`Provider model discovery returned HTTP ${response.status} (URL ${url.toString()})`);
       }
-      throw error;
+      const bytes = await readResponseBytes(response);
+      const text = await decodeBodyText(response, bytes);
+      if (!text.trim()) {
+        throw new Error(`Provider model list response is empty (${discoveryDiagnostics(response, url, undefined, bytes)})`);
+      }
+      try { payload = JSON.parse(text); }
+      catch (error) {
+        if (error instanceof SyntaxError) {
+          throw new Error(`Provider model list is not valid JSON (${discoveryDiagnostics(response, url, text, bytes)})`);
+        }
+        throw error;
+      }
+    } finally {
+      clear();
     }
     const parsed = parseProviderModelList(payload);
     for (const model of parsed.models) found.set(model.id, model);
@@ -275,7 +316,7 @@ export async function handleChannelModelRefresh(channelId: string, env: Env): Pr
       discovery: await getDiscoveryState(env.DB, channelId),
     });
   } catch (error) {
-    const message = error instanceof Error && error.name === 'TimeoutError'
+    const message = isTimeoutError(error)
       ? 'Provider model discovery timed out' : error instanceof Error ? error.message : 'Model discovery failed';
     await saveDiscoveryError(env.DB, channelId, message);
     return json({ error: { message }, discovery: await getDiscoveryState(env.DB, channelId) }, 502);

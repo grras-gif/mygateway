@@ -64,22 +64,30 @@ export async function handleRequest(
     throw e;
   }
 
-  // --- Gateway API (Hono + OpenAPI) ---
-  if (path.startsWith('/v1/')) {
-    const gatewayResponse = await handleGatewayHono(request, env, ctx);
-    if (gatewayResponse) {
-      return gatewayResponse;
+  // --- Dispatch (gateway / admin / management) ---
+  // Guard the dispatch so an uncaught error can never surface as the platform's
+  // plain-text 545; every backend route returns a JSON error instead.
+  const requestId = generateRequestId();
+  try {
+    // --- Gateway API (Hono + OpenAPI) ---
+    if (path.startsWith('/v1/')) {
+      const gatewayResponse = await handleGatewayHono(request, env, ctx);
+      if (gatewayResponse) {
+        return gatewayResponse;
+      }
+      // Hono returned 404 (unknown /v1/* route) — fall through to a proper error
+      return gatewayErrorResponse('invalid_request', 'Gateway route not found', requestId);
     }
-    // Hono returned 404 (unknown /v1/* route) — fall through to a proper error
-    const requestId = generateRequestId();
-    return gatewayErrorResponse('invalid_request', 'Gateway route not found', requestId);
-  }
 
-  // --- Admin API ---
-  if (path.startsWith('/admin/api/')) {
-    return handleAdminApi(request, url, env);
-  }
+    // --- Admin API ---
+    if (path.startsWith('/admin/api/')) {
+      return await handleAdminApi(request, url, env);
+    }
 
-  // --- Versioned Management API for scoped machine credentials ---
-  return handleManagementApi(request, url, env, ctx);
+    // --- Versioned Management API for scoped machine credentials ---
+    return await handleManagementApi(request, url, env, ctx);
+  } catch (error) {
+    console.error('unhandled_request_error', { requestId, path, error });
+    return jsonResponse({ error: { message: 'Internal server error', type: 'internal_error' } }, { status: 500 });
+  }
 }

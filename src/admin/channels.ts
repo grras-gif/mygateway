@@ -4,7 +4,7 @@
 
 import { Env } from '../env.ts';
 import { gatewayErrorResponse } from '../http/errors.ts';
-import { fetchWithTimeout } from '../http/abort.ts';
+import { fetchWithTimeout, isTimeoutError } from '../http/abort.ts';
 import { generateId, nowSeconds } from '../shared/ids.ts';
 import {
   listChannels,
@@ -222,7 +222,7 @@ export async function handleChannelPreflight(
       }),
     });
   } catch (error) {
-    const message = error instanceof Error && error.name === 'TimeoutError'
+    const message = isTimeoutError(error)
       ? 'Provider model discovery timed out' : error instanceof Error ? error.message : 'Model discovery failed';
     return json({ ok: false, error: { message } }, 502);
   }

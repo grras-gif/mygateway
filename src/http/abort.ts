@@ -34,6 +34,12 @@ export function createTimeoutSignal(ms: number): TimeoutSignal {
  *
  * On timeout the underlying fetch rejects with an `AbortError`, matching the
  * native `AbortSignal` `timeout()` behavior.
+ *
+ * The timeout only covers receiving the response headers: once the `Response`
+ * is returned the timer is already cleared, so callers that read the body must
+ * hold their own signal for the duration of that read (see
+ * `src/admin/model-discovery.ts`, which keeps the `createTimeoutSignal` signal
+ * alive across the body read instead of using this helper).
  */
 export async function fetchWithTimeout(
   input: RequestInfo | URL,
@@ -46,4 +52,14 @@ export async function fetchWithTimeout(
   } finally {
     clear();
   }
+}
+
+/**
+ * True when `error` came from an aborted or timed-out fetch. The runtime rejects
+ * with `AbortError` when a controller aborts; `TimeoutError` is accepted for
+ * runtimes that surface it instead.
+ */
+export function isTimeoutError(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null)?.name;
+  return name === 'AbortError' || name === 'TimeoutError';
 }

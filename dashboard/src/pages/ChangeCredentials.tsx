@@ -31,7 +31,9 @@ export default function ChangeCredentials() {
           new_password: newPassword(),
         }),
       });
-      const data = await response.json();
+      const text = await response.text();
+      let data: any = {};
+      try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
       if (!response.ok) throw new Error(data.error?.message ?? t('auth.changeFailed'));
       await auth.check();
       navigate('/', { replace: true });
