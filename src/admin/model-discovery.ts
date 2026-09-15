@@ -42,6 +42,8 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_MODELS = 500;
 const MAX_PAGES = 5;
 const MAX_ERROR_BODY_CHARS = 300;
+/** Extra attempts when the upstream hands back an unusable (empty / zero-filled) body. */
+const MAX_BODY_RETRIES = 2;
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
@@ -121,6 +123,11 @@ function hexPreview(bytes: Uint8Array, limit = 32): string {
 function truncateBodyForError(text: string): string {
   const collapsed = text.replace(/\s+/g, ' ').trim();
   return collapsed.length > MAX_ERROR_BODY_CHARS ? `${collapsed.slice(0, MAX_ERROR_BODY_CHARS)}…` : collapsed;
+}
+
+/** True when a non-empty body carries no printable text at all (only NUL / control bytes). */
+function isZeroFilledBody(text: string): boolean {
+  return text.length > 0 && !/[^\u0000-\u001F]/.test(text);
 }
 
 /**
@@ -209,37 +216,57 @@ export async function discoverProviderModels(
     } else if (adapter.pagination === 'page_token' && pageToken) {
       url.searchParams.set('pageToken', pageToken);
     }
-    const headers = new Headers({ 'Accept': 'application/json', 'User-Agent': 'mygateway/0.1.0' });
-    if (protocol.auth_scheme === 'x_api_key') {
-      headers.set('x-api-key', providerKey);
-      headers.set('anthropic-version', protocol.api_version ?? '2023-06-01');
-    } else {
-      headers.set('Authorization', `Bearer ${providerKey}`);
-    }
-    // Best-effort: ask upstream not to compress so diagnostics stay readable.
-    try { headers.set('Accept-Encoding', 'identity'); } catch { /* header may be forbidden by the runtime; the decode fallback covers it */ }
-    // Keep the timeout alive across the body read; `fetchWithTimeout` only covers headers.
-    const { signal, clear } = createTimeoutSignal(DISCOVERY_TIMEOUT_MS);
-    let payload: unknown;
-    try {
-      const response = await fetch(url, { headers, signal });
-      if (!response.ok) {
-        throw new Error(`Provider model discovery returned HTTP ${response.status} (URL ${url.toString()})`);
+    const buildHeaders = (): Headers => {
+      const headers = new Headers({ 'Accept': 'application/json', 'User-Agent': 'mygateway/0.1.0' });
+      if (protocol.auth_scheme === 'x_api_key') {
+        headers.set('x-api-key', providerKey);
+        headers.set('anthropic-version', protocol.api_version ?? '2023-06-01');
+      } else {
+        headers.set('Authorization', `Bearer ${providerKey}`);
       }
-      const bytes = await readResponseBytes(response);
-      const text = await decodeBodyText(response, bytes);
-      if (!text.trim()) {
-        throw new Error(`Provider model list response is empty (${discoveryDiagnostics(response, url, undefined, bytes)})`);
+      // Best-effort: ask upstream not to compress so diagnostics stay readable.
+      try { headers.set('Accept-Encoding', 'identity'); } catch { /* header may be forbidden by the runtime; the decode fallback covers it */ }
+      return headers;
+    };
+
+    let payload: unknown = undefined;
+    for (let attempt = 0; ; attempt++) {
+      const attemptUrl = new URL(url.toString());
+      const headers = buildHeaders();
+      if (attempt > 0) {
+        // The unusable body is usually a stale/empty CDN cache entry: bypass it.
+        headers.set('Cache-Control', 'no-cache');
+        headers.set('Pragma', 'no-cache');
+        attemptUrl.searchParams.set('_ts', String(Date.now()));
       }
-      try { payload = JSON.parse(text); }
-      catch (error) {
-        if (error instanceof SyntaxError) {
-          throw new Error(`Provider model list is not valid JSON (${discoveryDiagnostics(response, url, text, bytes)})`);
+      // Keep the timeout alive across the body read; `fetchWithTimeout` only covers headers.
+      const { signal, clear } = createTimeoutSignal(DISCOVERY_TIMEOUT_MS);
+      try {
+        const response = await fetch(attemptUrl, { headers, signal });
+        if (!response.ok) {
+          throw new Error(`Provider model discovery returned HTTP ${response.status} (URL ${attemptUrl.toString()})`);
         }
-        throw error;
+        const bytes = await readResponseBytes(response);
+        const text = await decodeBodyText(response, bytes);
+        if (!text.trim()) {
+          if (attempt < MAX_BODY_RETRIES) continue;
+          throw new Error(`Provider model list response is empty (${discoveryDiagnostics(response, attemptUrl, undefined, bytes)})`);
+        }
+        if (isZeroFilledBody(text)) {
+          if (attempt < MAX_BODY_RETRIES) continue;
+          throw new Error(`Provider returned a zero-filled response body (${discoveryDiagnostics(response, attemptUrl, text, bytes)})`);
+        }
+        try { payload = JSON.parse(text); }
+        catch (error) {
+          if (error instanceof SyntaxError) {
+            throw new Error(`Provider model list is not valid JSON (${discoveryDiagnostics(response, attemptUrl, text, bytes)})`);
+          }
+          throw error;
+        }
+        break;
+      } finally {
+        clear();
       }
-    } finally {
-      clear();
     }
     const parsed = parseProviderModelList(payload);
     for (const model of parsed.models) found.set(model.id, model);
