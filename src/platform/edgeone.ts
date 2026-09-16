@@ -7,11 +7,10 @@
  * request arrives on `context.request`, configuration/secrets come from
  * `context.env`, and neither D1 nor a Workers Assets binding exists.
  *
- * Routing is handled by the platform: the `cloud-functions/` file tree maps
- * `/health`, `/admin/api/*`, `/v1/*` and `/management/v1/*` to dedicated
- * entries, while static files and the SPA shell stay on the static host. This
- * adapter therefore only bridges the two runtimes for the requests the platform
- * already routed here:
+ * Routing is handled by a single Hono app (`src/platform/edgeone-app.ts`) that
+ * owns `/health`, `/admin/api/*`, `/v1/*` and `/management/v1/*`; static files
+ * and the SPA shell stay on the static host. This adapter therefore only bridges
+ * the two runtimes for the requests the platform already routed here:
  *  - it builds a Workers-shaped `Env` from the platform environment;
  *  - it substitutes explicit, safe fallbacks for the missing bindings so an
  *    unavailable database surfaces as a clear `503` instead of an opaque crash.
@@ -138,7 +137,7 @@ export function bindingUnavailableResponse(error: MissingBindingError): Response
 }
 
 /** Generic `500` body for unexpected failures inside the gateway. */
-function internalErrorResponse(error: unknown): Response {
+export function internalErrorResponse(error: unknown): Response {
   return Response.json(
     {
       error: {
@@ -191,25 +190,45 @@ function createExecutionContext(): ExecutionContext {
 }
 
 /**
+ * Run a gateway-shaped handler with a platform-built `Env` and normalized error
+ * mapping.
+ *
+ * Shared by every EdgeOne entry (the Hono app in `edgeone-app.ts` and the
+ * Workers-compatible `onRequest` wrapper below) so both report identical status
+ * codes: a missing binding becomes `503 binding_unavailable`, and any other
+ * failure becomes a generic `500`. Auth still runs before any binding access, so
+ * unauthenticated requests keep their original `401`/`400` semantics.
+ */
+export async function runWithPlatformEnv(
+  source: Record<string, unknown> | undefined,
+  ctx: ExecutionContext | undefined,
+  handler: (env: Env, ctx: ExecutionContext) => Promise<Response>,
+): Promise<Response> {
+  const env = buildPlatformEnv(source);
+  const executionCtx = ctx ?? createExecutionContext();
+
+  try {
+    return await handler(env, executionCtx);
+  } catch (error) {
+    if (error instanceof MissingBindingError) {
+      return bindingUnavailableResponse(error);
+    }
+    return internalErrorResponse(error);
+  }
+}
+
+/**
  * Wrap the gateway worker into an EdgeOne Cloud Function `onRequest` handler.
  *
- * The platform routes only the gateway API prefixes here (see the
- * `cloud-functions/` entry files); static files and the SPA shell never reach
- * this handler.
+ * Retained for the Workers-compatible handler shape; the platform's Hono mode
+ * uses `src/platform/edgeone-app.ts` instead. Static files and the SPA shell
+ * never reach this handler.
  */
 export function createEdgeOneHandler(worker: GatewayWorker) {
   return async function onRequest(context: PlatformContext): Promise<Response> {
     const request = toStandardRequest(context.request);
-    const env = buildPlatformEnv(context.env);
-    const ctx = createExecutionContext();
-
-    try {
-      return await worker.fetch(request, env, ctx);
-    } catch (error) {
-      if (error instanceof MissingBindingError) {
-        return bindingUnavailableResponse(error);
-      }
-      return internalErrorResponse(error);
-    }
+    return runWithPlatformEnv(context.env, undefined, (env, ctx) =>
+      worker.fetch(request, env, ctx),
+    );
   };
 }

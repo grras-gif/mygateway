@@ -77,12 +77,12 @@
 - **深链接刷新**：控制台为单页应用，深层路由（如 `/channels`、`/analytics/usage`）整页刷新时由
   Worker 与 EdgeOne 托管层回退到 `index.html` 外壳；缺失的静态资源（带文件扩展名的路径）仍返回
   真实 404，不被 HTML 回退掩盖。
-- **托管入口**：控制台静态产物与网关 API 由同一次部署提供；`cloud-functions/` 下按前缀拆分服务端
-  入口（`health.js` → `/health`、`admin/api/[[default]].js` → `/admin/api/*`、`v1/[[default]].js` →
-  `/v1/*`、`management/v1/[[default]].js` → `/management/v1/*`），只把上述 API 交给网关处理，其余
-  静态资源与 SPA 路由由静态托管承接（`edgeone.json` 用 `/*` → `/index.html` 兜底 SPA 路由，仅在无
-  其他路由匹配时生效）。托管运行时不具备 D1 / 静态资源绑定时，相关 API 返回明确的 `503`，
-  而不是把 API 请求回退成 HTML。
+- **托管入口**：控制台静态产物与网关 API 由同一次部署提供；平台把项目识别为 Hono 框架模式，
+  因此 `cloud-functions/` 只保留单一 `[[default]].js` 入口并默认导出 Hono 应用
+  （`src/platform/edgeone-app.ts`）。该应用统一接管 `/health`、`/v1/*`、`/admin/api/*` 与
+  `/management/v1/*` 并复用现有网关逻辑，其余静态资源与 SPA 路由由静态托管承接（`edgeone.json`
+  用 `/*` → `/index.html` 兜底 SPA 路由，仅在无其他路由匹配时生效）。托管运行时不具备
+  D1 / 静态资源绑定时，相关 API 返回明确的 `503`，而不是把 API 请求回退成 HTML。
 - **本地运行**：源码仓提供 `npm run local` 单命令入口；首次运行自动安装锁定依赖、生成仅供本地
   使用的 Secret、构建控制台、迁移本地 D1 并启动 Worker，后续运行复用本地状态。该入口用于体验、
   开发和测试，不宣称为独立于 Cloudflare Workers Runtime 的生产服务器。

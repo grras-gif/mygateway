@@ -6,8 +6,11 @@ import {
   createEdgeOneHandler,
   createMissingAssets,
   createMissingDatabase,
+  internalErrorResponse,
+  runWithPlatformEnv,
   toStandardRequest,
 } from '../src/platform/edgeone.ts';
+import { app } from '../src/platform/edgeone-app.ts';
 
 const asD1 = (value: unknown): D1Database => value as unknown as D1Database;
 
@@ -120,6 +123,78 @@ describe('createEdgeOneHandler', () => {
     const response = await handler({ request: new Request('https://gw.example.com/health') });
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('ok');
+  });
+});
+
+describe('runWithPlatformEnv', () => {
+  test('builds the Env and hands the handler a usable execution context', async () => {
+    const response = await runWithPlatformEnv({ APP_VERSION: '9.9.9' }, undefined, async (env, ctx) => {
+      ctx.waitUntil(Promise.reject(new Error('statistics failed')));
+      return new Response(env.APP_VERSION ?? 'missing');
+    });
+    expect(await response.text()).toBe('9.9.9');
+  });
+
+  test('maps a missing binding to a 503 and other failures to a 500', async () => {
+    const missing = await runWithPlatformEnv(undefined, undefined, async (env) => {
+      env.DB.prepare('select 1');
+      return new Response('unreachable');
+    });
+    expect(missing.status).toBe(503);
+
+    const crashed = await runWithPlatformEnv(undefined, undefined, async () => {
+      throw new Error('boom');
+    });
+    expect(crashed.status).toBe(500);
+    const body = (await crashed.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('gateway_internal_error');
+  });
+
+  test('internalErrorResponse is a gateway-shaped 500', async () => {
+    const response = internalErrorResponse(new Error('boom'));
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('gateway_internal_error');
+    expect(body.error.message).toContain('boom');
+  });
+});
+
+describe('edgeone Hono app', () => {
+  const call = (path: string, init?: RequestInit, env: Record<string, unknown> = {}) =>
+    app.fetch(new Request(`https://gw.example.com${path}`, init), env);
+
+  test('answers /health with status and version from the platform env', async () => {
+    const response = await call('/health', undefined, { APP_VERSION: '9.9.9' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 'ok', version: '9.9.9' });
+  });
+
+  test('falls back to the default version when APP_VERSION is absent', async () => {
+    const response = await call('/health');
+    expect(await response.json()).toEqual({ status: 'ok', version: '0.1.0' });
+  });
+
+  test('returns a JSON 404 for paths outside the API prefixes', async () => {
+    const response = await call('/not-an-api');
+    expect(response.status).toBe(404);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('not_found');
+  });
+
+  test('rejects /v1/* without a key before touching the missing database', async () => {
+    const response = await call('/v1/models');
+    expect(response.status).toBe(401);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('invalid_api_key');
+  });
+
+  test('maps a missing D1 binding to a clear 503', async () => {
+    const response = await call('/v1/models', {
+      headers: { authorization: 'Bearer gw_0123456789abcdef0123456789abcdef' },
+    });
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('binding_unavailable');
   });
 });
 
