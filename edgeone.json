@@ -1,5 +1,15 @@
 {
   "outputDirectory": "dashboard/dist",
+  "cloudFunctions": {
+    "nodejs": {
+      "externalNodeModules": [
+        "hono",
+        "@hono/zod-openapi",
+        "@scalar/hono-api-reference",
+        "zod"
+      ]
+    }
+  },
   "rewrites": [
     { "source": "/login", "destination": "/index.html" },
     { "source": "/change-password", "destination": "/index.html" },
