@@ -10,6 +10,7 @@ import { logConfigError, logEvent } from './shared/log.ts';
 import { handleAdminApi } from './admin/router.ts';
 import { handleGatewayHono } from './gateway/hono.ts';
 import { handleManagementApi } from './management/router.ts';
+import { serveStaticAsset } from './http/static-assets.ts';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -62,12 +63,10 @@ export default {
     }
 
     // --- Static assets (management dashboard) ---
+    // Non-API GET/HEAD: serve the asset, falling back to the SPA shell for
+    // deep console routes (/channels, /analytics/usage, ...) that miss.
     if (['GET', 'HEAD'].includes(request.method)) {
-      try {
-        return env.ASSETS.fetch(request);
-      } catch {
-        return new Response('Not Found', { status: 404 });
-      }
+      return serveStaticAsset(request, env.ASSETS);
     }
 
     return new Response('Method Not Allowed', { status: 405 });

@@ -13,6 +13,7 @@ import { extractGatewayKey, hashGatewayKey } from '../auth/gateway-key.ts';
 import { handleAnthropicMessages, handleChatCompletions, handleResponses } from './chat-completions.ts';
 import { handleModelsList } from './models-list.ts';
 import { authenticateGatewayKeyHash } from './access-resolver.ts';
+import { applyGatewayCors, gatewayPreflightResponse } from '../http/cors.ts';
 
 // Env type for Hono handlers — reuse the full Env so existing handlers type-check.
 type Bindings = Env;
@@ -27,6 +28,19 @@ export const gatewayApp = new OpenAPIHono<{
   Bindings: Bindings;
   Variables: Variables;
 }>();
+
+// --- CORS: handle preflight before auth, add CORS headers to every response ---
+// Registered first so OPTIONS short-circuits without hitting the auth
+// middleware (preflight requests never carry credentials). Non-preflight
+// requests still run through auth below, so key validation is unchanged.
+gatewayApp.use('/v1/*', async (c, next) => {
+  const origin = c.req.header('Origin') ?? null;
+  if (c.req.method === 'OPTIONS') {
+    return gatewayPreflightResponse(origin);
+  }
+  await next();
+  applyGatewayCors(c.res.headers, origin);
+});
 
 // --- Auth middleware: validate Bearer gateway key, attach requestId ---
 // Registered BEFORE routes so it intercepts every /v1/* request.

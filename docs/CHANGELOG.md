@@ -6,6 +6,14 @@
 
 ## 未发布：仓库整理与接续开发基线
 
+- 修复控制台深层路由整页刷新返回 `Not Found`：Worker 静态资源分支对无扩展名的导航类
+  GET/HEAD 回退到 `index.html` 外壳（缺失的静态资源仍保留真实 404），并新增根目录
+  `edgeone.json` 在 EdgeOne 托管层用 `rewrites` 兜底已知控制台路由。
+- 修复浏览器跨域调用 `/v1/*` 报 `Invalid JSON body`：`/v1/*` 处理 OPTIONS 预检（204 与 CORS
+  头，含 `Authorization`、`x-api-key`、`Content-Type`、`anthropic-version`），并为所有网关响应
+  补充 CORS 头以便读取错误体；body 缺失或非 JSON 时返回可定位的 `400 invalid_request` 提示，
+  鉴权与错误码语义不变。
+
 - Gateway JSON 请求体默认上限由 2 MiB 提高到 16 MiB；System 页新增网关运行参数，可调整至
   最高 64 MiB，适配内嵌 Base64 图片请求。设置保存到 D1，数据面使用 60 秒 isolate 缓存，
   413 响应会明确返回当前上限；单元、Admin API 和 UI 测试覆盖边界、持久化与页面交互。

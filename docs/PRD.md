@@ -74,6 +74,9 @@
   手动选择后持久化覆盖系统偏好，API 文档继承控制台当前主题；页面遵循统一的标题、卡片、状态、
   浮层和可访问性规范，详见[详细设计](DESIGN.md#13-控制台视觉与交互规范)。
 - **模块**：概览（Dashboard）、渠道、模型、API Keys、Analytics（用量分析 / 请求日志）、System。
+- **深链接刷新**：控制台为单页应用，深层路由（如 `/channels`、`/analytics/usage`）整页刷新时由
+  Worker 与 EdgeOne 托管层回退到 `index.html` 外壳；缺失的静态资源（带文件扩展名的路径）仍返回
+  真实 404，不被 HTML 回退掩盖。
 - **本地运行**：源码仓提供 `npm run local` 单命令入口；首次运行自动安装锁定依赖、生成仅供本地
   使用的 Secret、构建控制台、迁移本地 D1 并启动 Worker，后续运行复用本地状态。该入口用于体验、
   开发和测试，不宣称为独立于 Cloudflare Workers Runtime 的生产服务器。
@@ -155,6 +158,11 @@
 - **Fallback**：连接错误、超时、408、429、部分 5xx 和可靠额度不足错误；只在响应开始前回退。
 - **熔断**：连续故障后在当前 isolate 冷却，不主动探测 Provider。
 - **流式**：SSE 增量解析与透传，客户端取消向上游传播。
+- **跨域调用**：`/v1/*` 支持浏览器跨域调用，OPTIONS 预检返回 204 并声明允许的方法与请求头
+  （`Authorization`、`x-api-key`、`Content-Type`、`anthropic-version`），所有网关响应附带 CORS
+  头以便浏览器读取错误体；鉴权、路由与限额逻辑不变。
+- **请求体校验**：body 缺失或不是合法 JSON 对象时返回 `400 invalid_request`，并明确提示需携带
+  `Content-Type: application/json` 与合法 JSON 请求体，不改变先鉴权后报错的顺序。
 
 ### 3.7 用量与 Analytics
 

@@ -48,6 +48,17 @@ function elapsedMs(startedAt: number): number {
 }
 
 /**
+ * Actionable message for a missing or malformed JSON request body. Kept as a
+ * pure helper so the wording is unit-testable without a full gateway setup.
+ */
+export function invalidJsonBodyMessage(bodyText: string | null): string {
+  if ((bodyText ?? '').trim().length === 0) {
+    return 'Request body is empty. Provide a JSON object and set Content-Type: application/json.';
+  }
+  return 'Request body must be a valid JSON object. Check that Content-Type is application/json and the body is well-formed JSON.';
+}
+
+/**
  * POST /v1/chat/completions
  */
 export async function handleChatCompletions(
@@ -161,7 +172,7 @@ async function handleProtocolCompletion(
 
   if (!access.key) return timed(invalidKeyResponse());
   if (!body) {
-    return timed(gatewayErrorResponse('invalid_request', 'Invalid JSON body', requestId));
+    return timed(gatewayErrorResponse('invalid_request', invalidJsonBodyMessage(bodyText), requestId));
   }
   if (!modelCanResolve) {
     return timed(gatewayErrorResponse('invalid_request', 'model must be a non-empty string (max 128 chars)', requestId, 'model'));
