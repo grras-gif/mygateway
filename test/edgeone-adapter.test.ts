@@ -6,39 +6,10 @@ import {
   createEdgeOneHandler,
   createMissingAssets,
   createMissingDatabase,
-  isGatewayApiPath,
   toStandardRequest,
 } from '../src/platform/edgeone.ts';
 
 const asD1 = (value: unknown): D1Database => value as unknown as D1Database;
-
-describe('isGatewayApiPath', () => {
-  test('claims the documented API prefixes and the health check', () => {
-    for (const path of [
-      '/admin/api/session',
-      '/v1/chat/completions',
-      '/management/v1/capabilities',
-      '/health',
-    ]) {
-      expect(isGatewayApiPath(path)).toBe(true);
-    }
-  });
-
-  test('leaves static assets and SPA routes to the platform static host', () => {
-    for (const path of [
-      '/',
-      '/index.html',
-      '/assets/app.js',
-      '/channels',
-      '/analytics/usage',
-      '/skill.json',
-      '/healthz',
-      '/v1',
-    ]) {
-      expect(isGatewayApiPath(path)).toBe(false);
-    }
-  });
-});
 
 describe('missing binding fallbacks', () => {
   test('throws a located MissingBindingError when the database is used', () => {
@@ -95,7 +66,7 @@ describe('buildPlatformEnv', () => {
 });
 
 describe('createEdgeOneHandler', () => {
-  test('routes API paths through the gateway worker', async () => {
+  test('runs every request the platform routed here through the gateway worker', async () => {
     const handler = createEdgeOneHandler({
       fetch: async (request) => new Response(`api:${new URL(request.url).pathname}`),
     });
@@ -103,27 +74,15 @@ describe('createEdgeOneHandler', () => {
     expect(await response.text()).toBe('api:/v1/models');
   });
 
-  test('defers non-API requests to the platform via next()', async () => {
+  test('builds a Workers-shaped Env from the platform environment', async () => {
     const handler = createEdgeOneHandler({
-      fetch: async () => {
-        throw new Error('gateway must not run for static requests');
-      },
+      fetch: async (_request, env) => new Response(env.APP_VERSION ?? 'missing'),
     });
     const response = await handler({
-      request: new Request('https://gw.example.com/assets/app.js'),
-      next: () => new Response('static', { status: 200 }),
+      request: new Request('https://gw.example.com/health'),
+      env: { APP_VERSION: '9.9.9' },
     });
-    expect(await response.text()).toBe('static');
-  });
-
-  test('stops a self-subrequest from looping back into the catch-all', async () => {
-    const handler = createEdgeOneHandler({ fetch: async () => new Response('api') });
-    const response = await handler({
-      request: new Request('https://gw.example.com/channels', {
-        headers: { 'x-mygateway-static-pass': '1' },
-      }),
-    });
-    expect(response.status).toBe(404);
+    expect(await response.text()).toBe('9.9.9');
   });
 
   test('converts a missing binding into a clear 503', async () => {
@@ -151,20 +110,16 @@ describe('createEdgeOneHandler', () => {
     expect(response.status).toBe(500);
   });
 
-  test('forwards waitUntil and does not swallow the gateway response', async () => {
-    const seen: Promise<unknown>[] = [];
+  test('drains background work without delaying the gateway response', async () => {
     const handler = createEdgeOneHandler({
       fetch: async (_request, _env, ctx) => {
-        ctx.waitUntil(Promise.resolve('stat'));
+        ctx.waitUntil(Promise.reject(new Error('statistics failed')));
         return new Response('ok', { status: 200 });
       },
     });
-    const response = await handler({
-      request: new Request('https://gw.example.com/health'),
-      waitUntil: (promise) => seen.push(promise),
-    });
+    const response = await handler({ request: new Request('https://gw.example.com/health') });
     expect(response.status).toBe(200);
-    expect(seen).toHaveLength(1);
+    expect(await response.text()).toBe('ok');
   });
 });
 

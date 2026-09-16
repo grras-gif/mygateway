@@ -7,14 +7,14 @@
  * request arrives on `context.request`, configuration/secrets come from
  * `context.env`, and neither D1 nor a Workers Assets binding exists.
  *
- * This adapter bridges the two runtimes without touching the gateway logic:
- *  - it decides which paths the gateway owns (see `isGatewayApiPath`);
+ * Routing is handled by the platform: the `cloud-functions/` file tree maps
+ * `/health`, `/admin/api/*`, `/v1/*` and `/management/v1/*` to dedicated
+ * entries, while static files and the SPA shell stay on the static host. This
+ * adapter therefore only bridges the two runtimes for the requests the platform
+ * already routed here:
  *  - it builds a Workers-shaped `Env` from the platform environment;
  *  - it substitutes explicit, safe fallbacks for the missing bindings so an
- *    unavailable database surfaces as a clear `503` instead of an HTML page or
- *    an opaque crash;
- *  - it defers every non-API request to the platform static host so real files
- *    and SPA rewrites are not shadowed.
+ *    unavailable database surfaces as a clear `503` instead of an opaque crash.
  *
  * NOTE (migration): the D1/ASSETS fallbacks are a temporary degradation, not a
  * real backend. A production EdgeOne deployment must wire `env.DB` to an
@@ -24,21 +24,6 @@
  */
 
 import type { Env } from '../env.ts';
-
-/** Path prefixes the gateway core owns. Mirrors `wrangler.jsonc` run_worker_first. */
-export const GATEWAY_API_PREFIXES = ['/admin/api/', '/v1/', '/management/v1/'] as const;
-
-/** Exact health-check path (no auth, no database). */
-export const GATEWAY_HEALTH_PATH = '/health';
-
-/**
- * True when the path must be handled by the gateway. Everything else (static
- * files, the SPA shell, `robots.txt`, ...) belongs to the platform static host.
- */
-export function isGatewayApiPath(pathname: string): boolean {
-  if (pathname === GATEWAY_HEALTH_PATH) return true;
-  return GATEWAY_API_PREFIXES.some((prefix) => pathname.startsWith(prefix));
-}
 
 /** Error raised when the gateway touches a binding this runtime cannot provide. */
 export class MissingBindingError extends Error {
@@ -167,14 +152,17 @@ function internalErrorResponse(error: unknown): Response {
   );
 }
 
-/** Minimal view of the EdgeOne Cloud Function `context`. */
+/**
+ * Minimal view of the EdgeOne Cloud Function `context`.
+ *
+ * EdgeOne's `EventContext` exposes `request`, `env`, `params`, `uuid`, `geo`,
+ * `clientIp` and `server`; it has no `next` and no `waitUntil`. Static hosting
+ * and SPA fallbacks are handled by the platform, so this adapter never needs to
+ * hand a request back to the static host.
+ */
 export interface PlatformContext {
   request: Request;
   env?: Record<string, unknown>;
-  /** EdgeOne hook to hand the request back to the platform static host. */
-  next?: () => Promise<Response> | Response;
-  /** EdgeOne hook to keep background work alive after the response is sent. */
-  waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 /** The gateway entry contract (`src/index.ts` default export). */
@@ -182,26 +170,19 @@ export interface GatewayWorker {
   fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>;
 }
 
-/** Header used to detect a self-subrequest while deferring to the static host. */
-const PASS_THROUGH_HEADER = 'x-mygateway-static-pass';
-
 /** Adapt the platform request into a standard `Request` the gateway can read. */
 export function toStandardRequest(request: Request): Request {
   return request instanceof Request ? request : new Request(request);
 }
 
 /**
- * Build an `ExecutionContext` for the gateway. `waitUntil` is forwarded to the
- * platform when available and otherwise drained so background statistics never
- * turn into unhandled rejections (and never delay the response).
+ * Build an `ExecutionContext` for the gateway. EdgeOne has no `waitUntil` hook,
+ * so background work is drained to keep statistics from turning into unhandled
+ * rejections (and to never delay the response).
  */
-function createExecutionContext(waitUntil?: (promise: Promise<unknown>) => void): ExecutionContext {
+function createExecutionContext(): ExecutionContext {
   return {
     waitUntil(promise: Promise<unknown>): void {
-      if (typeof waitUntil === 'function') {
-        waitUntil(promise);
-        return;
-      }
       Promise.resolve(promise).catch(() => {});
     },
     passThroughOnException(): void {},
@@ -210,50 +191,17 @@ function createExecutionContext(waitUntil?: (promise: Promise<unknown>) => void)
 }
 
 /**
- * Defer a non-API request to the platform static host so real files and the SPA
- * rewrites keep working. Prefers EdgeOne's `next()`; without it, re-fetches the
- * same URL with a guard header that stops a self-subrequest from looping back
- * into this catch-all.
- */
-async function passToStaticHost(context: PlatformContext, request: Request): Promise<Response> {
-  if (typeof context.next === 'function') {
-    return await context.next();
-  }
-
-  if (request.headers.get(PASS_THROUGH_HEADER)) {
-    // We re-entered our own catch-all; stop instead of looping.
-    return new Response('Not Found', { status: 404 });
-  }
-
-  if (request.method !== 'GET' && request.method !== 'HEAD') {
-    return new Response('Method Not Allowed', { status: 405 });
-  }
-
-  const headers = new Headers(request.headers);
-  headers.set(PASS_THROUGH_HEADER, '1');
-  try {
-    return await fetch(new Request(request.url, { method: request.method, headers }));
-  } catch {
-    return new Response('Not Found', { status: 404 });
-  }
-}
-
-/**
  * Wrap the gateway worker into an EdgeOne Cloud Function `onRequest` handler.
- * API paths run through the gateway; everything else is deferred to the static
- * host so static files and SPA routes are never shadowed by HTML.
+ *
+ * The platform routes only the gateway API prefixes here (see the
+ * `cloud-functions/` entry files); static files and the SPA shell never reach
+ * this handler.
  */
 export function createEdgeOneHandler(worker: GatewayWorker) {
   return async function onRequest(context: PlatformContext): Promise<Response> {
     const request = toStandardRequest(context.request);
-    const { pathname } = new URL(request.url);
-
-    if (!isGatewayApiPath(pathname)) {
-      return passToStaticHost(context, request);
-    }
-
     const env = buildPlatformEnv(context.env);
-    const ctx = createExecutionContext(context.waitUntil);
+    const ctx = createExecutionContext();
 
     try {
       return await worker.fetch(request, env, ctx);

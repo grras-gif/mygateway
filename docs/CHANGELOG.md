@@ -10,11 +10,12 @@
   GET/HEAD 回退到 `index.html` 外壳（缺失的静态资源仍保留真实 404），并新增根目录
   `edgeone.json` 在 EdgeOne 托管层用 `rewrites` 兜底已知控制台路由。
 - 修复 EdgeOne Makers 把项目当作纯静态站点部署、导致 `/admin/api/*`、`/v1/*`、`/management/v1/*`、
-  `/health` 全部回退成 `index.html`（前端 `response.json()` 报 `Unexpected token '<'`）：新增仓库根
-  catch-all 服务端入口 `cloud-functions/[[default]].js`，把上述 API 前缀交给现有 `src/index.ts`
-  Worker 处理，非 API 请求放行给静态托管；`src/platform/edgeone.ts` 负责从平台环境构造 `Env`，
-  在缺失 D1 / 静态资源绑定时返回明确的 `503` 而非崩溃；`edgeone.json` 补充 `cloudFunctions`
-  配置块，使静态产物与函数入口都被识别。
+  `/health` 全部回退成 `index.html`（前端 `response.json()` 报 `Unexpected token '<'`）：按平台路由
+  约定在 `cloud-functions/` 下按前缀拆分服务端入口（`health.js`、`admin/api/[[default]].js`、
+  `v1/[[default]].js`、`management/v1/[[default]].js`），把上述 API 前缀交给现有 `src/index.ts`
+  Worker 处理；`src/platform/edgeone.ts` 负责从平台环境构造 `Env`，在缺失 D1 / 静态资源绑定时返回
+  明确的 `503` 而非崩溃；`edgeone.json` 用 `cloudFunctions.externalNodeModules` 声明依赖，并用
+  `/*` → `/index.html` 兜底 SPA 路由（仅在无其他路由匹配时生效）。
 - 修复浏览器跨域调用 `/v1/*` 报 `Invalid JSON body`：`/v1/*` 处理 OPTIONS 预检（204 与 CORS
   头，含 `Authorization`、`x-api-key`、`Content-Type`、`anthropic-version`），并为所有网关响应
   补充 CORS 头以便读取错误体；body 缺失或非 JSON 时返回可定位的 `400 invalid_request` 提示，

@@ -1,24 +1,12 @@
 {
   "outputDirectory": "dashboard/dist",
   "cloudFunctions": {
-    "nodejs": {
-      "externalNodeModules": [
-        "hono",
-        "@hono/zod-openapi",
-        "@scalar/hono-api-reference",
-        "zod"
-      ]
-    }
+    "externalNodeModules": [
+      "hono",
+      "@hono/zod-openapi",
+      "@scalar/hono-api-reference",
+      "zod"
+    ]
   },
-  "rewrites": [
-    { "source": "/login", "destination": "/index.html" },
-    { "source": "/change-password", "destination": "/index.html" },
-    { "source": "/channels", "destination": "/index.html" },
-    { "source": "/models", "destination": "/index.html" },
-    { "source": "/keys", "destination": "/index.html" },
-    { "source": "/requests", "destination": "/index.html" },
-    { "source": "/analytics/usage", "destination": "/index.html" },
-    { "source": "/analytics/logs", "destination": "/index.html" },
-    { "source": "/system", "destination": "/index.html" }
-  ]
+  "rewrites": [{ "source": "/*", "destination": "/index.html" }]
 }
