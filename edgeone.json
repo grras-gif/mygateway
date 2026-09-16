@@ -1,4 +1,5 @@
 {
+  "outputDirectory": "dashboard/dist",
   "rewrites": [
     { "source": "/login", "destination": "/index.html" },
     { "source": "/change-password", "destination": "/index.html" },
