@@ -42,8 +42,24 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_MODELS = 500;
 const MAX_PAGES = 5;
 const MAX_ERROR_BODY_CHARS = 300;
-/** Extra attempts when the upstream hands back an unusable (empty / zero-filled) body. */
-const MAX_BODY_RETRIES = 2;
+
+/** Request/read shapes tried in order when a provider hands back an unusable body. */
+interface DiscoveryAttempt {
+  /** Send `Accept-Encoding: identity` so the body stays uncompressed. */
+  identityEncoding: boolean;
+  /** Add cache-bypassing request headers plus a `_ts` query param. */
+  bypassCache: boolean;
+  /** How to consume the response body. */
+  read: 'buffer' | 'stream';
+  /** Attach the abort signal (request timeout). */
+  signal: boolean;
+}
+
+const DISCOVERY_ATTEMPTS: DiscoveryAttempt[] = [
+  { identityEncoding: true, bypassCache: false, read: 'buffer', signal: true },
+  { identityEncoding: false, bypassCache: true, read: 'stream', signal: true },
+  { identityEncoding: false, bypassCache: true, read: 'stream', signal: false },
+];
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
@@ -73,9 +89,18 @@ function discoveryProtocol(channel: ProviderDiscoveryTarget, presetId: string | 
   return channel.protocols.find((protocol) => protocol.protocol === adapter.protocol) ?? channel.protocols[0];
 }
 
-async function readResponseBytes(response: Response): Promise<Uint8Array> {
+/**
+ * Read the response body as bytes. `arrayBuffer()` and the streaming reader
+ * fail differently across runtimes, so callers pick the strategy per attempt.
+ */
+async function readResponseBody(response: Response, strategy: 'buffer' | 'stream'): Promise<Uint8Array> {
   const length = Number(response.headers.get('content-length') ?? 0);
   if (length > MAX_RESPONSE_BYTES) throw new Error('Model list response is too large');
+  if (strategy === 'buffer') {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > MAX_RESPONSE_BYTES) throw new Error('Model list response is too large');
+    return new Uint8Array(buffer);
+  }
   if (!response.body) return new Uint8Array();
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -216,7 +241,7 @@ export async function discoverProviderModels(
     } else if (adapter.pagination === 'page_token' && pageToken) {
       url.searchParams.set('pageToken', pageToken);
     }
-    const buildHeaders = (): Headers => {
+    const buildHeaders = (identityEncoding: boolean): Headers => {
       const headers = new Headers({ 'Accept': 'application/json', 'User-Agent': 'mygateway/0.1.0' });
       if (protocol.auth_scheme === 'x_api_key') {
         headers.set('x-api-key', providerKey);
@@ -224,48 +249,51 @@ export async function discoverProviderModels(
       } else {
         headers.set('Authorization', `Bearer ${providerKey}`);
       }
-      // Best-effort: ask upstream not to compress so diagnostics stay readable.
-      try { headers.set('Accept-Encoding', 'identity'); } catch { /* header may be forbidden by the runtime; the decode fallback covers it */ }
+      if (identityEncoding) {
+        try { headers.set('Accept-Encoding', 'identity'); } catch { /* may be forbidden; the decode fallback covers it */ }
+      }
       return headers;
     };
 
     let payload: unknown = undefined;
-    for (let attempt = 0; ; attempt++) {
+    for (let attempt = 0; attempt < DISCOVERY_ATTEMPTS.length; attempt++) {
+      const plan = DISCOVERY_ATTEMPTS[attempt];
+      const isLast = attempt === DISCOVERY_ATTEMPTS.length - 1;
       const attemptUrl = new URL(url.toString());
-      const headers = buildHeaders();
-      if (attempt > 0) {
-        // The unusable body is usually a stale/empty CDN cache entry: bypass it.
+      const headers = buildHeaders(plan.identityEncoding);
+      if (plan.bypassCache) {
         headers.set('Cache-Control', 'no-cache');
         headers.set('Pragma', 'no-cache');
         attemptUrl.searchParams.set('_ts', String(Date.now()));
       }
-      // Keep the timeout alive across the body read; `fetchWithTimeout` only covers headers.
-      const { signal, clear } = createTimeoutSignal(DISCOVERY_TIMEOUT_MS);
+      const timeout = plan.signal ? createTimeoutSignal(DISCOVERY_TIMEOUT_MS) : null;
       try {
-        const response = await fetch(attemptUrl, { headers, signal });
+        const response = await fetch(attemptUrl, { headers, ...(timeout ? { signal: timeout.signal } : {}) });
         if (!response.ok) {
           throw new Error(`Provider model discovery returned HTTP ${response.status} (URL ${attemptUrl.toString()})`);
         }
-        const bytes = await readResponseBytes(response);
+        const bytes = await readResponseBody(response, plan.read);
         const text = await decodeBodyText(response, bytes);
         if (!text.trim()) {
-          if (attempt < MAX_BODY_RETRIES) continue;
-          throw new Error(`Provider model list response is empty (${discoveryDiagnostics(response, attemptUrl, undefined, bytes)})`);
+          const message = `Provider model list response is empty (read ${plan.read}, bytes ${bytes.byteLength}, ${discoveryDiagnostics(response, attemptUrl, undefined, bytes)})`;
+          if (!isLast) continue;
+          throw new Error(message);
         }
         if (isZeroFilledBody(text)) {
-          if (attempt < MAX_BODY_RETRIES) continue;
-          throw new Error(`Provider returned a zero-filled response body (${discoveryDiagnostics(response, attemptUrl, text, bytes)})`);
+          const message = `Provider returned a zero-filled response body (read ${plan.read}, bytes ${bytes.byteLength}, ${discoveryDiagnostics(response, attemptUrl, text, bytes)})`;
+          if (!isLast) continue;
+          throw new Error(message);
         }
         try { payload = JSON.parse(text); }
         catch (error) {
           if (error instanceof SyntaxError) {
-            throw new Error(`Provider model list is not valid JSON (${discoveryDiagnostics(response, attemptUrl, text, bytes)})`);
+            throw new Error(`Provider model list is not valid JSON (read ${plan.read}, bytes ${bytes.byteLength}, ${discoveryDiagnostics(response, attemptUrl, text, bytes)})`);
           }
           throw error;
         }
         break;
       } finally {
-        clear();
+        timeout?.clear();
       }
     }
     const parsed = parseProviderModelList(payload);
