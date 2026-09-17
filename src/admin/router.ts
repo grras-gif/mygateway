@@ -5,7 +5,7 @@
 import { Env } from '../env.ts';
 import { generateRequestId } from '../http/request-id.ts';
 import { gatewayErrorResponse } from '../http/errors.ts';
-import { validateAdminSession, createAdminSession, clearSessionCookie } from '../auth/admin-session.ts';
+import { validateAdminSession, validateStatelessSession, createAdminSession, clearSessionCookie } from '../auth/admin-session.ts';
 import {
   hashPassword,
   validatePassword,
@@ -22,6 +22,7 @@ import {
   updateAdminCredentials,
 } from '../db/admin-users.ts';
 import { logAuthFailed } from '../shared/log.ts';
+import { isBindingUnavailable } from '../db/binding.ts';
 import {
   handleChannelsCollection,
   handleChannelPreflight,
@@ -67,7 +68,11 @@ export async function handleAdminApi(
   }
 
   // --- Session required for everything else ---
-  const session = await validateAdminSession(request, env.DB, env.MASTER_KEY);
+  // Without a database binding the gateway cannot read the admin row, so fall
+  // back to verifying the signed cookie on its own (stateless session).
+  const session = isBindingUnavailable(env.DB)
+    ? await validateStatelessSession(request, env.MASTER_KEY)
+    : await validateAdminSession(request, env.DB, env.MASTER_KEY);
   if (!session) {
     logAuthFailed(requestId, 'invalid_or_missing_session');
     return gatewayErrorResponse('invalid_api_key', 'Admin session required', requestId);
@@ -328,6 +333,34 @@ async function handleLogin(
     const password = body.password ?? '';
     if (!username || !password) {
       return gatewayErrorResponse('invalid_request', 'Username and password are required', requestId);
+    }
+
+    // Without a database binding there is no admin row to read or write. Validate
+    // the configured bootstrap credentials and issue a stateless signed cookie
+    // instead, so the console can still be used on a store-less runtime.
+    if (isBindingUnavailable(env.DB)) {
+      const initialUsername = env.INITIAL_ADMIN_USERNAME ?? 'admin';
+      const initialPassword = env.INITIAL_ADMIN_PASSWORD ?? env.ADMIN_TOKEN ?? '';
+      const valid = initialPassword.length > 0
+        && username === initialUsername
+        && await verifyBootstrapPassword(password, initialPassword);
+      if (!valid) {
+        logAuthFailed(requestId, 'invalid_admin_token');
+        return gatewayErrorResponse('invalid_api_key', 'Invalid username or password', requestId);
+      }
+      const setCookie = await createAdminSession(
+        env.MASTER_KEY,
+        { id: 'local-admin', username: initialUsername, must_change_password: 0, session_version: 1 },
+        new URL(request.url).protocol === 'https:',
+      );
+      return new Response(JSON.stringify({ ok: true, username: initialUsername, must_change_password: false }), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Set-Cookie': setCookie,
+          'x-gateway-request-id': requestId,
+        },
+      });
     }
 
     let user = await getAdminByUsername(env.DB, username);

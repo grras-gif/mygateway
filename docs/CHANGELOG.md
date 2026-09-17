@@ -6,6 +6,10 @@
 
 ## 未发布：仓库整理与接续开发基线
 
+- 修复 EdgeOne Makers 运行时无 D1 绑定时控制台无法登录：管理员可凭配置的
+  `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD`（或 `ADMIN_TOKEN`）登录，网关签发不写库、
+  不查库的无状态签名会话 Cookie；有数据库绑定时行为完全不变。
+
 - 修复登录/改密接口把内部绑定错误吞成 `400 "Invalid request body"`：`handleLogin` 与
   `handleChangeCredentials` 的 try 仅包裹请求体解析，畸形 JSON 才返回可定位的 `400
   invalid_request`，数据库/会话等内部异常改为向上抛出，D1 绑定缺失时如实返回 `503

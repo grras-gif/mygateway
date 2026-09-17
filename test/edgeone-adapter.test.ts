@@ -251,15 +251,15 @@ describe('edgeone Hono app', () => {
     expect(body.error.code).toBe('binding_unavailable');
   });
 
-  test('surfaces a missing DB as a 503 on admin login instead of a bogus 400', async () => {
+  test('rejects admin login without a database when no bootstrap credentials are configured', async () => {
     const response = await call('/admin/api/auth/login', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ username: 'admin', password: 'x' }),
     });
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(401);
     const body = (await response.json()) as { error: { code: string } };
-    expect(body.error.code).toBe('binding_unavailable');
+    expect(body.error.code).toBe('invalid_api_key');
   });
 
   test('returns a 400 invalid_request for a malformed login body', async () => {
@@ -271,6 +271,35 @@ describe('edgeone Hono app', () => {
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error: { code: string } };
     expect(body.error.code).toBe('invalid_request');
+  });
+
+  test('logs in with the configured credentials when no database is bound', async () => {
+    const response = await call('/admin/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'secret' }),
+    }, {
+      MASTER_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      INITIAL_ADMIN_USERNAME: 'admin',
+      INITIAL_ADMIN_PASSWORD: 'secret',
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('set-cookie')).toContain('mg_admin_session=');
+  });
+
+  test('rejects a wrong password without a database', async () => {
+    const response = await call('/admin/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'wrong' }),
+    }, {
+      MASTER_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+      INITIAL_ADMIN_USERNAME: 'admin',
+      INITIAL_ADMIN_PASSWORD: 'secret',
+    });
+    expect(response.status).toBe(401);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('invalid_api_key');
   });
 });
 

@@ -95,17 +95,24 @@ export async function createAdminSession(
   return `${COOKIE_NAME}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MAX_AGE_SECONDS}${secure ? '; Secure' : ''}`;
 }
 
-export async function validateAdminSession(
-  request: Request,
-  db: D1Database,
-  masterKey: string,
-): Promise<AdminSession | null> {
+/** Read the signed session cookie value from the request, if present. */
+function readSessionCookie(request: Request): string | null {
   const cookie = (request.headers.get('cookie') ?? '')
     .split(';')
     .map((part) => part.trim())
     .find((part) => part.startsWith(`${COOKIE_NAME}=`));
   if (!cookie) return null;
-  const payload = await verifyCookieValue(cookie.slice(COOKIE_NAME.length + 1), await deriveHmacKey(masterKey));
+  return cookie.slice(COOKIE_NAME.length + 1);
+}
+
+export async function validateAdminSession(
+  request: Request,
+  db: D1Database,
+  masterKey: string,
+): Promise<AdminSession | null> {
+  const value = readSessionCookie(request);
+  if (!value) return null;
+  const payload = await verifyCookieValue(value, await deriveHmacKey(masterKey));
   if (!payload) return null;
   const user = await getAdminById(db, payload.user_id);
   if (!user || user.session_version !== payload.session_version) return null;
@@ -114,6 +121,23 @@ export async function validateAdminSession(
     username: user.username,
     mustChangePassword: user.must_change_password === 1,
     sessionVersion: user.session_version,
+  };
+}
+
+/** Verify a signed session cookie without a database (used when no store is bound). */
+export async function validateStatelessSession(
+  request: Request,
+  masterKey: string,
+): Promise<AdminSession | null> {
+  const value = readSessionCookie(request);
+  if (!value) return null;
+  const payload = await verifyCookieValue(value, await deriveHmacKey(masterKey));
+  if (!payload) return null;
+  return {
+    userId: payload.user_id,
+    username: payload.username,
+    mustChangePassword: payload.must_change_password,
+    sessionVersion: payload.session_version,
   };
 }
 

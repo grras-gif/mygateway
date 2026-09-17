@@ -23,6 +23,7 @@
  */
 
 import type { Env } from '../env.ts';
+import { markBindingUnavailable } from '../db/binding.ts';
 
 /** Error raised when the gateway touches a binding this runtime cannot provide. */
 export class MissingBindingError extends Error {
@@ -48,22 +49,28 @@ export function createMissingDatabase(): D1Database {
   const fail = (): never => {
     throw new MissingBindingError('DB', DATABASE_HINT);
   };
-  return new Proxy({} as D1Database, {
+  const stub = new Proxy({} as D1Database, {
     get(_target, property) {
       // Keep the stub non-thenable and safe to inspect/log.
       if (typeof property === 'symbol' || property === 'then') return undefined;
       return fail;
     },
   });
+  // Mark the placeholder so callers can branch to a no-database code path.
+  markBindingUnavailable(stub);
+  return stub;
 }
 
 /** A Fetcher-shaped stub that reports every asset as missing (404). */
 export function createMissingAssets(): Fetcher {
-  return {
+  const stub = {
     async fetch(): Promise<Response> {
       return new Response('Not Found', { status: 404 });
     },
   } as unknown as Fetcher;
+  // Mark the placeholder so callers can branch to a no-assets code path.
+  markBindingUnavailable(stub);
+  return stub;
 }
 
 /**
