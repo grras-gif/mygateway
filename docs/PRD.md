@@ -76,7 +76,8 @@
 - **模块**：概览（Dashboard）、渠道、模型、API Keys、Analytics（用量分析 / 请求日志）、System。
 - **深链接刷新**：控制台为单页应用，深层路由（如 `/channels`、`/analytics/usage`）整页刷新时由
   Worker 与 EdgeOne 托管层回退到 `index.html` 外壳；缺失的静态资源（带文件扩展名的路径）仍返回
-  真实 404，不被 HTML 回退掩盖。
+  真实 404，不被 HTML 回退掩盖。在 EdgeOne 托管下，根级 catch-all 云函数对无扩展名的导航型请求
+  回源取 `/index.html` 外壳并返回 `text/html`，其余未知路径仍返回 JSON 404。
 - **托管入口**：控制台静态产物与网关 API 由同一次部署提供；平台把项目识别为 Hono 框架模式，
   因此 `cloud-functions/` 只保留单一 `[[default]].js` 入口并默认导出 Hono 应用
   （`src/platform/edgeone-app.ts`）。该应用统一接管 `/health`、`/v1/*`、`/admin/api/*` 与

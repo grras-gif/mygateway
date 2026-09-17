@@ -14,7 +14,8 @@
  *  - `/v1/*`            → `src/gateway/hono.ts` `gatewayApp`
  *  - `/admin/api/*`     → `src/admin/router.ts` `handleAdminApi`
  *  - `/management/v1/*` → `src/management/router.ts` `handleManagementApi`
- *  - anything else      → `404`
+ *  - navigation paths   → SPA shell (`/index.html`) re-fetched from the host
+ *  - anything else      → JSON `404`
  *
  * The platform has no D1 / Workers Assets binding, so `src/platform/edgeone.ts`
  * builds a Workers-shaped `Env` from the platform environment (`c.env`) and maps
@@ -34,6 +35,19 @@ type PlatformBindings = Record<string, unknown>;
 type AppContext = Context<{ Bindings: PlatformBindings }>;
 
 export const app = new Hono<{ Bindings: PlatformBindings }>();
+
+/** Host path of the SPA shell that deep navigation routes fall back to. */
+const SPA_SHELL_PATH = '/index.html';
+
+/**
+ * A navigation request is a path whose final segment has no file extension.
+ * `/login` and `/analytics/logs` qualify; `/assets/app.js` and `/index.html` do
+ * not, which also keeps the shell path itself out of the fallback branch.
+ */
+export function isNavigationRequest(pathname: string): boolean {
+  const lastSegment = pathname.slice(pathname.lastIndexOf('/') + 1);
+  return lastSegment.length > 0 && !lastSegment.includes('.');
+}
 
 /** Read the platform execution context; Hono throws when the runtime omits it. */
 function executionContextOf(c: AppContext): ExecutionContext | undefined {
@@ -70,10 +84,28 @@ app.all('/management/v1/*', (c) =>
   dispatch(c, (env, ctx) => handleManagementApi(c.req.raw, new URL(c.req.url), env, ctx)),
 );
 
-// Static files and the SPA shell are served by the platform; a request that
-// reaches the function on an unknown path is a genuine miss.
-app.notFound(() =>
-  Response.json(
+// Static files and the SPA shell are served by the platform. A non-API
+// navigation path (for example `/login` or `/analytics/logs`) that reaches the
+// function is a deep-route refresh, so re-fetch the SPA shell from the host and
+// return it as HTML instead of a JSON 404. `/index.html` itself carries an
+// extension and never enters this branch, so there is no self-recursion.
+app.notFound(async (c) => {
+  const url = new URL(c.req.url);
+  if (isNavigationRequest(url.pathname)) {
+    const shellUrl = new URL(SPA_SHELL_PATH + url.search, url.origin);
+    try {
+      const shell = await fetch(shellUrl);
+      if (shell.ok && (shell.headers.get('content-type') ?? '').includes('text/html')) {
+        return new Response(shell.body, {
+          status: 200,
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        });
+      }
+    } catch {
+      // Shell unavailable — fall through to the JSON 404 below.
+    }
+  }
+  return Response.json(
     {
       error: {
         message: 'Not Found',
@@ -83,7 +115,7 @@ app.notFound(() =>
       },
     },
     { status: 404 },
-  ),
-);
+  );
+});
 
 export default app;

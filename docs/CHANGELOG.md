@@ -9,6 +9,10 @@
 - 修复控制台深层路由整页刷新返回 `Not Found`：Worker 静态资源分支对无扩展名的导航类
   GET/HEAD 回退到 `index.html` 外壳（缺失的静态资源仍保留真实 404），并新增根目录
   `edgeone.json` 在 EdgeOne 托管层用 `rewrites` 兜底已知控制台路由。
+- 修复 EdgeOne 托管下控制台前端深链（如 `/login`、`/system`、`/analytics/logs`）整页刷新仍返回
+  JSON `Not Found`：根级 catch-all 云函数此前对未匹配路径直接返回 JSON 404，使 `edgeone.json` 的
+  `rewrites` 因函数优先匹配而失效；现对无扩展名的导航型请求回源取 `/index.html` 外壳并返回
+  `text/html`，其余未知路径仍返回 JSON 404。
 - 修复 EdgeOne Makers 把项目当作纯静态站点部署、导致 `/admin/api/*`、`/v1/*`、`/management/v1/*`、
   `/health` 全部回退成 `index.html`（前端 `response.json()` 报 `Unexpected token '<'`）：平台因引入
   Hono 而按 Hono 框架模式识别项目，要求入口使用 `[[filename]]` 命名并默认导出框架应用实例，旧的

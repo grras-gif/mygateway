@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import {
   MissingBindingError,
   bindingUnavailableResponse,
@@ -10,7 +10,9 @@ import {
   runWithPlatformEnv,
   toStandardRequest,
 } from '../src/platform/edgeone.ts';
-import { app } from '../src/platform/edgeone-app.ts';
+import { app, isNavigationRequest } from '../src/platform/edgeone-app.ts';
+
+const SHELL = '<!DOCTYPE html><html><body><div id="root"></div></body></html>';
 
 const asD1 = (value: unknown): D1Database => value as unknown as D1Database;
 
@@ -163,6 +165,20 @@ describe('edgeone Hono app', () => {
   const call = (path: string, init?: RequestInit, env: Record<string, unknown> = {}) =>
     app.fetch(new Request(`https://gw.example.com${path}`, init), env);
 
+  // The platform host serves the SPA shell over global `fetch`; each case
+  // replaces it and this guard restores the original afterwards. The default
+  // rejects so unknown-path cases stay deterministic without real networking.
+  let originalFetch: typeof globalThis.fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error('offline');
+    }) as typeof globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
   test('answers /health with status and version from the platform env', async () => {
     const response = await call('/health', undefined, { APP_VERSION: '9.9.9' });
     expect(response.status).toBe(200);
@@ -176,6 +192,44 @@ describe('edgeone Hono app', () => {
 
   test('returns a JSON 404 for paths outside the API prefixes', async () => {
     const response = await call('/not-an-api');
+    expect(response.status).toBe(404);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('not_found');
+  });
+
+  test('classifies navigation paths by a missing file extension', () => {
+    expect(isNavigationRequest('/login')).toBe(true);
+    expect(isNavigationRequest('/analytics/logs')).toBe(true);
+    expect(isNavigationRequest('/missing.js')).toBe(false);
+    expect(isNavigationRequest('/index.html')).toBe(false);
+  });
+
+  test('serves the SPA shell for a navigation path when the host returns HTML', async () => {
+    globalThis.fetch = (async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      expect(new URL(url).pathname).toBe('/index.html');
+      return new Response(SHELL, { status: 200, headers: { 'content-type': 'text/html' } });
+    }) as typeof globalThis.fetch;
+
+    const response = await call('/login');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/html');
+    expect(await response.text()).toBe(SHELL);
+  });
+
+  test('keeps a JSON 404 for a non-navigation unknown path', async () => {
+    const response = await call('/missing.js');
+    expect(response.status).toBe(404);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('not_found');
+  });
+
+  test('falls back to a JSON 404 when the shell fetch fails', async () => {
+    globalThis.fetch = (async () => {
+      throw new Error('offline');
+    }) as typeof globalThis.fetch;
+
+    const response = await call('/system');
     expect(response.status).toBe(404);
     const body = (await response.json()) as { error: { code: string } };
     expect(body.error.code).toBe('not_found');
