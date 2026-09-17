@@ -310,8 +310,20 @@ async function handleLogin(
   env: Env,
   requestId: string,
 ): Promise<Response> {
+  // Narrow try: only body parsing may degrade to a 400. Database/session
+  // failures must propagate so a missing binding maps to 503 upstream.
+  let body: { username?: string; password?: string };
   try {
-    const body = (await request.json()) as { username?: string; password?: string };
+    body = (await request.json()) as { username?: string; password?: string };
+  } catch {
+    return gatewayErrorResponse(
+      'invalid_request',
+      'Request body must be a valid JSON object. Check that Content-Type is application/json and the body is well-formed JSON.',
+      requestId,
+    );
+  }
+
+  try {
     const username = body.username?.trim() ?? '';
     const password = body.password ?? '';
     if (!username || !password) {
@@ -360,7 +372,8 @@ async function handleLogin(
       request_id: requestId,
       error: error instanceof Error ? error.message : String(error),
     });
-    return gatewayErrorResponse('invalid_request', 'Invalid request body', requestId);
+    // Rethrow so a missing binding becomes a real 503 instead of a bogus 400.
+    throw error;
   }
 }
 
@@ -370,46 +383,54 @@ async function handleChangeCredentials(
   userId: string,
   requestId: string,
 ): Promise<Response> {
+  // Narrow try: only body parsing may degrade to a 400. Database/session
+  // failures must propagate so a missing binding maps to 503 upstream.
+  let body: { current_password?: string; username?: string; new_password?: string };
   try {
-    const body = (await request.json()) as {
+    body = (await request.json()) as {
       current_password?: string;
       username?: string;
       new_password?: string;
     };
-    const username = body.username?.trim() ?? '';
-    const currentPassword = body.current_password ?? '';
-    const newPassword = body.new_password ?? '';
-    const usernameError = validateUsername(username);
-    const passwordError = validatePassword(newPassword);
-    if (usernameError || passwordError) {
-      return gatewayErrorResponse('invalid_request', usernameError ?? passwordError!, requestId);
-    }
-
-    const user = await getAdminById(env.DB, userId);
-    if (!user || !(await verifyPassword(currentPassword, {
-      hash: user.password_hash,
-      salt: user.password_salt,
-      iterations: user.password_iterations,
-    }))) {
-      return gatewayErrorResponse('invalid_api_key', 'Current password is incorrect', requestId);
-    }
-
-    const existing = await getAdminByUsername(env.DB, username);
-    if (existing && existing.id !== user.id) {
-      return gatewayErrorResponse('invalid_request', 'Username is already in use', requestId);
-    }
-
-    const updated = await updateAdminCredentials(env.DB, user.id, username, await hashPassword(newPassword));
-    const setCookie = await createAdminSession(
-      env.MASTER_KEY,
-      updated,
-      new URL(request.url).protocol === 'https:',
+  } catch {
+    return gatewayErrorResponse(
+      'invalid_request',
+      'Request body must be a valid JSON object. Check that Content-Type is application/json and the body is well-formed JSON.',
+      requestId,
     );
-    return json({ ok: true, username: updated.username, must_change_password: false }, 200, {
-      'Set-Cookie': setCookie,
-      'x-gateway-request-id': requestId,
-    });
-  } catch (error) {
-    return gatewayErrorResponse('invalid_request', (error as Error).message, requestId);
   }
+
+  const username = body.username?.trim() ?? '';
+  const currentPassword = body.current_password ?? '';
+  const newPassword = body.new_password ?? '';
+  const usernameError = validateUsername(username);
+  const passwordError = validatePassword(newPassword);
+  if (usernameError || passwordError) {
+    return gatewayErrorResponse('invalid_request', usernameError ?? passwordError!, requestId);
+  }
+
+  const user = await getAdminById(env.DB, userId);
+  if (!user || !(await verifyPassword(currentPassword, {
+    hash: user.password_hash,
+    salt: user.password_salt,
+    iterations: user.password_iterations,
+  }))) {
+    return gatewayErrorResponse('invalid_api_key', 'Current password is incorrect', requestId);
+  }
+
+  const existing = await getAdminByUsername(env.DB, username);
+  if (existing && existing.id !== user.id) {
+    return gatewayErrorResponse('invalid_request', 'Username is already in use', requestId);
+  }
+
+  const updated = await updateAdminCredentials(env.DB, user.id, username, await hashPassword(newPassword));
+  const setCookie = await createAdminSession(
+    env.MASTER_KEY,
+    updated,
+    new URL(request.url).protocol === 'https:',
+  );
+  return json({ ok: true, username: updated.username, must_change_password: false }, 200, {
+    'Set-Cookie': setCookie,
+    'x-gateway-request-id': requestId,
+  });
 }

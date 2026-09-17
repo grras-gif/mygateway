@@ -250,6 +250,28 @@ describe('edgeone Hono app', () => {
     const body = (await response.json()) as { error: { code: string } };
     expect(body.error.code).toBe('binding_unavailable');
   });
+
+  test('surfaces a missing DB as a 503 on admin login instead of a bogus 400', async () => {
+    const response = await call('/admin/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'x' }),
+    });
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('binding_unavailable');
+  });
+
+  test('returns a 400 invalid_request for a malformed login body', async () => {
+    const response = await call('/admin/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'not-json',
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('invalid_request');
+  });
 });
 
 describe('toStandardRequest', () => {

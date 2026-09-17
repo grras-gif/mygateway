@@ -6,6 +6,11 @@
 
 ## 未发布：仓库整理与接续开发基线
 
+- 修复登录/改密接口把内部绑定错误吞成 `400 "Invalid request body"`：`handleLogin` 与
+  `handleChangeCredentials` 的 try 仅包裹请求体解析，畸形 JSON 才返回可定位的 `400
+  invalid_request`，数据库/会话等内部异常改为向上抛出，D1 绑定缺失时如实返回 `503
+  binding_unavailable`，不再掩盖真实故障或泄露内部异常信息。
+
 - 修复控制台深层路由整页刷新返回 `Not Found`：Worker 静态资源分支对无扩展名的导航类
   GET/HEAD 回退到 `index.html` 外壳（缺失的静态资源仍保留真实 404），并新增根目录
   `edgeone.json` 在 EdgeOne 托管层用 `rewrites` 兜底已知控制台路由。
