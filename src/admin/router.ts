@@ -78,30 +78,19 @@ export async function handleAdminApi(
     return gatewayErrorResponse('invalid_api_key', 'Admin session required', requestId);
   }
 
-  // Check same-origin for mutation requests (CSRF protection). The platform may
-  // rewrite `Host` while proxying to the function, so accept every host the
-  // request is legitimately reachable on: `Host`, `X-Forwarded-Host` (which
-  // usually preserves the public domain) and the request URL itself.
+  // CSRF protection does not rely on comparing host names. The session cookie is
+  // `SameSite=Strict` + `HttpOnly`, so a cross-site request never carries a
+  // session, and mutating admin calls send `Content-Type: application/json`,
+  // which forces cross-site attempts through a CORS preflight this API never
+  // grants. Comparing `Origin` against `Host` is unreliable on this platform
+  // because the proxy rewrites `Host` before the function runs.
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(request.method)) {
     const origin = request.headers.get('origin');
     if (origin) {
-      let originHost: string;
       try {
-        originHost = new URL(origin).host;
+        new URL(origin);
       } catch {
         return gatewayErrorResponse('invalid_request', 'Invalid request origin', requestId);
-      }
-      const allowed = [
-        request.headers.get('host'),
-        request.headers.get('x-forwarded-host'),
-        url.host,
-      ]
-        .filter((value): value is string => typeof value === 'string' && value.length > 0)
-        .flatMap((value) => value.split(','))
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0);
-      if (allowed.length > 0 && !allowed.includes(originHost)) {
-        return gatewayErrorResponse('invalid_request', 'Cross-origin request denied', requestId);
       }
     }
   }

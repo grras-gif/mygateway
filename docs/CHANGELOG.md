@@ -6,6 +6,11 @@
 
 ## 未发布：仓库整理与接续开发基线
 
+- 修复 EdgeOne Makers 托管下控制台同源写请求仍被误判跨域：管理接口的 CSRF 校验不再比对主机名
+  （`Host` / `X-Forwarded-Host` / 请求 URL 均不可靠），改由 `SameSite=Strict` + `HttpOnly` 会话
+  Cookie 与非简单请求触发的 CORS 预检承担，仅在 `Origin` 存在但无法解析为合法 URL 时返回 `400
+  Invalid request origin`，避免平台改写 `Host` 造成的同源误判。
+
 - 修复 EdgeOne Makers 托管下控制台同源写请求被误判跨域：管理接口的 CSRF 同源校验由只比较
   `Host` 单值改为多候选主机匹配（`Host`、`X-Forwarded-Host`、请求 URL），兼容平台转发时改写
   `Host` 的部署方式；`Origin` 缺失或候选主机全部缺失时不拒绝，仍拒绝真正的跨站来源。

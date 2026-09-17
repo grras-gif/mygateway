@@ -303,9 +303,9 @@ describe('edgeone Hono app', () => {
     expect(body.error.code).toBe('invalid_api_key');
   });
 
-  // The platform rewrites `Host` to an internal host while proxying, so a
-  // same-origin browser write must still pass the CSRF check when
-  // `X-Forwarded-Host` carries the public domain.
+  // The platform rewrites `Host` to an internal host while proxying, so the
+  // CSRF check must not compare host names; a same-origin browser write is
+  // accepted and reaches the data plane regardless of the rewritten `Host`.
   test('accepts a same-origin mutation when the platform rewrote Host', async () => {
     const masterKey = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
     const setCookie = await createAdminSession(masterKey, {
@@ -335,7 +335,36 @@ describe('edgeone Hono app', () => {
     expect(body.error.code).toBe('binding_unavailable');
   });
 
-  test('rejects a mutation from a genuinely cross-site origin', async () => {
+  test('rejects a mutation with an unparsable Origin header', async () => {
+    const masterKey = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+    const setCookie = await createAdminSession(masterKey, {
+      id: 'local-admin',
+      username: 'admin',
+      must_change_password: 0,
+      session_version: 1,
+    }, false);
+    const cookie = setCookie.split(';')[0];
+
+    const response = await call('/admin/api/models', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        cookie,
+        origin: 'not-a-url',
+        host: 'internal.example.com',
+      },
+      body: JSON.stringify({ unified_model_id: 'edgeone-model', display_name: 'EdgeOne Model' }),
+    }, { MASTER_KEY: masterKey });
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: { code: string; message: string } };
+    expect(body.error.message).toBe('Invalid request origin');
+  });
+
+  // A cross-site `Origin` is no longer blocked here: cross-site protection is
+  // carried by the `SameSite=Strict` session cookie and the CORS preflight that
+  // non-simple requests trigger, not by comparing host names.
+  test('does not block a mutation from a cross-site origin by host comparison', async () => {
     const masterKey = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
     const setCookie = await createAdminSession(masterKey, {
       id: 'local-admin',
@@ -352,14 +381,13 @@ describe('edgeone Hono app', () => {
         cookie,
         origin: 'https://evil.example.com',
         host: 'internal.example.com',
-        'x-forwarded-host': 'public.example.com',
       },
-      body: '{}',
+      body: JSON.stringify({ unified_model_id: 'edgeone-model', display_name: 'EdgeOne Model' }),
     }, { MASTER_KEY: masterKey });
 
-    expect(response.status).toBe(400);
-    const body = (await response.json()) as { error: { code: string; message: string } };
-    expect(body.error.message).toBe('Cross-origin request denied');
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('binding_unavailable');
   });
 });
 
