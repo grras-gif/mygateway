@@ -78,16 +78,31 @@ export async function handleAdminApi(
     return gatewayErrorResponse('invalid_api_key', 'Admin session required', requestId);
   }
 
-  // Check same-origin for mutation requests (CSRF protection)
+  // Check same-origin for mutation requests (CSRF protection). The platform may
+  // rewrite `Host` while proxying to the function, so accept every host the
+  // request is legitimately reachable on: `Host`, `X-Forwarded-Host` (which
+  // usually preserves the public domain) and the request URL itself.
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(request.method)) {
     const origin = request.headers.get('origin');
-    const host = request.headers.get('host');
-    try {
-      if (origin && host && new URL(origin).host !== host) {
+    if (origin) {
+      let originHost: string;
+      try {
+        originHost = new URL(origin).host;
+      } catch {
+        return gatewayErrorResponse('invalid_request', 'Invalid request origin', requestId);
+      }
+      const allowed = [
+        request.headers.get('host'),
+        request.headers.get('x-forwarded-host'),
+        url.host,
+      ]
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+        .flatMap((value) => value.split(','))
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0);
+      if (allowed.length > 0 && !allowed.includes(originHost)) {
         return gatewayErrorResponse('invalid_request', 'Cross-origin request denied', requestId);
       }
-    } catch {
-      return gatewayErrorResponse('invalid_request', 'Invalid request origin', requestId);
     }
   }
 

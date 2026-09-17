@@ -6,6 +6,10 @@
 
 ## 未发布：仓库整理与接续开发基线
 
+- 修复 EdgeOne Makers 托管下控制台同源写请求被误判跨域：管理接口的 CSRF 同源校验由只比较
+  `Host` 单值改为多候选主机匹配（`Host`、`X-Forwarded-Host`、请求 URL），兼容平台转发时改写
+  `Host` 的部署方式；`Origin` 缺失或候选主机全部缺失时不拒绝，仍拒绝真正的跨站来源。
+
 - 修复 EdgeOne Makers 运行时无 D1 绑定时控制台无法登录：管理员可凭配置的
   `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD`（或 `ADMIN_TOKEN`）登录，网关签发不写库、
   不查库的无状态签名会话 Cookie；有数据库绑定时行为完全不变。

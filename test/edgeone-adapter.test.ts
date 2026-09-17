@@ -11,6 +11,7 @@ import {
   toStandardRequest,
 } from '../src/platform/edgeone.ts';
 import { app, isNavigationRequest } from '../src/platform/edgeone-app.ts';
+import { createAdminSession } from '../src/auth/admin-session.ts';
 
 const SHELL = '<!DOCTYPE html><html><body><div id="root"></div></body></html>';
 
@@ -300,6 +301,65 @@ describe('edgeone Hono app', () => {
     expect(response.status).toBe(401);
     const body = (await response.json()) as { error: { code: string } };
     expect(body.error.code).toBe('invalid_api_key');
+  });
+
+  // The platform rewrites `Host` to an internal host while proxying, so a
+  // same-origin browser write must still pass the CSRF check when
+  // `X-Forwarded-Host` carries the public domain.
+  test('accepts a same-origin mutation when the platform rewrote Host', async () => {
+    const masterKey = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+    const setCookie = await createAdminSession(masterKey, {
+      id: 'local-admin',
+      username: 'admin',
+      must_change_password: 0,
+      session_version: 1,
+    }, false);
+    const cookie = setCookie.split(';')[0];
+
+    const response = await call('/admin/api/models', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        cookie,
+        origin: 'https://public.example.com',
+        host: 'internal.example.com',
+        'x-forwarded-host': 'public.example.com',
+      },
+      // A body that passes model validation, so the request reaches the data
+      // plane and the only remaining failure is the missing D1 binding.
+      body: JSON.stringify({ unified_model_id: 'edgeone-model', display_name: 'EdgeOne Model' }),
+    }, { MASTER_KEY: masterKey });
+
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('binding_unavailable');
+  });
+
+  test('rejects a mutation from a genuinely cross-site origin', async () => {
+    const masterKey = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+    const setCookie = await createAdminSession(masterKey, {
+      id: 'local-admin',
+      username: 'admin',
+      must_change_password: 0,
+      session_version: 1,
+    }, false);
+    const cookie = setCookie.split(';')[0];
+
+    const response = await call('/admin/api/models', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        cookie,
+        origin: 'https://evil.example.com',
+        host: 'internal.example.com',
+        'x-forwarded-host': 'public.example.com',
+      },
+      body: '{}',
+    }, { MASTER_KEY: masterKey });
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: { code: string; message: string } };
+    expect(body.error.message).toBe('Cross-origin request denied');
   });
 });
 
