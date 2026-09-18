@@ -13,6 +13,18 @@ const dollarsToMicros = (value: string): number | null => {
 const microsToDollars = (micros: number | null): string =>
   micros === null ? '' : String(micros / 1_000_000);
 
+// Reads an admin API response and only accepts an array payload. Non-OK
+// responses, JSON parse failures, and non-array bodies all report ok: false.
+const readJsonArray = async <T,>(response: Response): Promise<{ ok: true; value: T[] } | { ok: false }> => {
+  if (!response.ok) return { ok: false };
+  try {
+    const data = await response.json();
+    return Array.isArray(data) ? { ok: true, value: data as T[] } : { ok: false };
+  } catch {
+    return { ok: false };
+  }
+};
+
 interface Channel {
   id: string;
   name: string;
@@ -57,6 +69,7 @@ export default function Models() {
   const [cards, setCards] = createSignal<ModelCard[]>([]);
   const [channels, setChannels] = createSignal<Channel[]>([]);
   const [loading, setLoading] = createSignal(true);
+  const [loadError, setLoadError] = createSignal('');
 
   // Create card form
   const [showCreate, setShowCreate] = createSignal(false);
@@ -98,20 +111,38 @@ export default function Models() {
   const [editBusy, setEditBusy] = createSignal(false);
 
   const fetchAll = async () => {
+    let error = '';
     try {
       const [m, c] = await Promise.all([
-        fetch('/admin/api/models').then((r) => r.json()),
-        fetch('/admin/api/channels').then((r) => r.json()),
+        fetch('/admin/api/models'),
+        fetch('/admin/api/channels'),
       ]);
-      setCards(m);
-      setChannels(c);
-    } catch {}
-    setLoading(false);
+      const [modelsData, channelsData] = await Promise.all([
+        readJsonArray<ModelCard>(m),
+        readJsonArray<Channel>(c),
+      ]);
+      // Only trust array payloads; otherwise fall back to an empty list so the
+      // UI keeps rendering even when the API returns an error object.
+      if (modelsData.ok) setCards(modelsData.value);
+      else { setCards([]); error = error || t('common.error'); }
+      if (channelsData.ok) setChannels(channelsData.value);
+      else { setChannels([]); error = error || t('common.error'); }
+    } catch {
+      setCards([]);
+      setChannels([]);
+      error = t('common.error');
+    } finally {
+      setLoadError(error);
+      setLoading(false);
+    }
   };
 
   onMount(fetchAll);
 
-  const activeChannels = () => channels().filter((c) => c.status === 'active');
+  const activeChannels = () => {
+    const list = channels();
+    return Array.isArray(list) ? list.filter((c) => c.status === 'active') : [];
+  };
 
   const loadChannelInventory = async (channelId: string) => {
     if (!channelId || channelInventory()[channelId]) return;
@@ -138,7 +169,10 @@ export default function Models() {
     void loadChannelInventory(channelId);
   };
 
-  const channelOf = (id: string) => channels().find((c) => c.id === id);
+  const channelOf = (id: string) => {
+    const list = channels();
+    return Array.isArray(list) ? list.find((c) => c.id === id) : undefined;
+  };
   const channelName = (id: string) => channelOf(id)?.name ?? id.slice(0, 8);
 
   const suggestedAlias = (channelId: string, modelId: string) => {
@@ -152,7 +186,10 @@ export default function Models() {
   // --- Create card ---
   const submitCreate = async (e: Event) => {
     e.preventDefault();
-    if (!newModelId() || !newDisplayName()) return;
+    if (!newModelId().trim() || !newDisplayName().trim()) {
+      setCreateError(t('common.error'));
+      return;
+    }
     setCreating(true);
     setCreateError('');
     try {
@@ -376,6 +413,7 @@ export default function Models() {
 
       {loading() && <p class="empty-state">Loading...</p>}
       <Show when={!loading()}><div class="channel-card-grid model-card-grid">
+        <Show when={loadError()}><div class="form-error">{loadError()}</div></Show>
         <button type="button" class="panel resource-add-card" aria-label={t('models.create')} aria-expanded={showCreate()} onClick={() => setShowCreate(true)}>
           <header class="channel-card-head resource-add-head"><span class="resource-add-icon" aria-hidden="true">+</span><div><strong>{t('models.create')}</strong><span>{t('models.createHint')}</span></div></header>
           <div class="channel-card-metrics resource-add-metrics" aria-hidden="true"><div><span>{t('models.instances')}</span><strong>—</strong></div><div><span>{t('channels.available')}</span><strong>—</strong></div></div>
